@@ -61,12 +61,12 @@ Example
 ```
 struct Counter { n: u32 }
 
-fn bump(c: inout Counter) { c.n = c.n + 1 }
+fn bump(c: inout Counter) { c.n = c.n + 1; }
 
 fn main() -> i32 {
-    var c = Counter { n: 0 }
-    bump(&c)       // `&` marks an inout argument at the call site
-    return c.n as i32
+    var c = Counter { n: 0 };
+    bump(&c);      // `&` marks an inout argument at the call site
+    return c.n as i32;
 }
 ```
 
@@ -95,7 +95,7 @@ Notes
 - Generics (v1): start with monomorphization limited to small instantiation counts, revisit with a dictionary-passing mode.
 
 ## Milestones
-1. Lexer, parser, type check for ints, structs, functions. Emit C, run hello-world on host.
+1. Lexer, parser, type check for ints, structs, functions. Emit C, run hello-world on host. **Done** (see README).
 2. Init/move/exclusivity pass, with a negative test suite of programs that must be rejected.
 3. Arrays, arenas, bounds checks, overflow traps.
 4. C FFI with `unsafe`; build a blinky for a real target (e.g. ARM Cortex-M via arm-none-eabi-gcc).

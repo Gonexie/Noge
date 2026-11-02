@@ -1,0 +1,26 @@
+struct Point { x: i32, y: i32 }
+struct Rect { origin: Point, size: Point }
+
+fn area(r: Rect) -> i32 { return r.size.x * r.size.y; }
+
+fn shift(p: inout Point, dx: i32, dy: i32) {
+    p.x = p.x + dx;
+    p.y = p.y + dy;
+}
+
+fn grow(r: inout Rect) {
+    shift(&r.origin, 1, 1);   // inout forwarded through a field
+    r.size.x = r.size.x * 2;
+}
+
+fn consume(p: sink Point) -> i32 { return p.x + p.y; }
+
+fn main() -> i32 {
+    var r = Rect { origin: Point { x: 0, y: 0 }, size: Point { x: 3, y: 4 } };
+    print(area(r));
+    grow(&r);
+    print(area(r));
+    print(r.origin.x + r.origin.y);
+    print(consume(r.size));
+    return 0;
+}

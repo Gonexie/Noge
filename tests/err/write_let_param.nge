@@ -1,0 +1,3 @@
+// error: read-only
+fn f(x: i32) { x = 1; }
+fn main() -> i32 { return 0; }

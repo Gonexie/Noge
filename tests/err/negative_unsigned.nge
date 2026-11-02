@@ -1,0 +1,2 @@
+// error: unsigned
+fn main() -> i32 { let a: u32 = -1; return 0; }

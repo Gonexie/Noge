@@ -1,0 +1,11 @@
+struct Counter { n: u32 }
+
+fn bump(c: inout Counter) { c.n = c.n + 1; }
+
+fn main() -> i32 {
+    var c = Counter { n: 0 };
+    bump(&c);
+    bump(&c);
+    print(c.n as i32);
+    return 0;
+}

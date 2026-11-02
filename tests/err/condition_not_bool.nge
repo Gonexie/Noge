@@ -1,0 +1,2 @@
+// error: type mismatch: expected 'bool'
+fn main() -> i32 { if 1 { } return 0; }

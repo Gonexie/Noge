@@ -1,0 +1,18 @@
+fn fib(n: u32) -> u64 {
+    var a: u64 = 0;
+    var b: u64 = 1;
+    var i: u32 = 0;
+    while i < n {
+        let t = a + b;
+        a = b;
+        b = t;
+        i = i + 1;
+    }
+    return a;
+}
+
+fn main() -> i32 {
+    print(fib(10) as i32);
+    print(fib(40) as i32);
+    return 0;
+}

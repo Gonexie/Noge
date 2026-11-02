@@ -1,0 +1,2 @@
+// error: already declared in this scope
+fn main() -> i32 { let a = 1; let a = 2; return 0; }
