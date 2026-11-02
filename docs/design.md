@@ -88,7 +88,7 @@ src/
 ```
 
 Notes
-- Implementation language for the compiler: pick one with quick builds (C or Zig). Self-hosting is a later goal.
+- Implementation language for the compiler: **C (C99)**. Fast builds, no dependencies, and the same toolchain that compiles the emitted code. Self-hosting is a later goal.
 - Emit C that is plain and warning-free: structs as structs, `inout` as pointers, checks as inline `if (...) trap();`.
 - `trap()` is a configurable hook, so an embedded target can reset or log instead of aborting.
 - Incremental: hash each module's interface plus body, recompile only changed modules, link with the system linker.
