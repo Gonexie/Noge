@@ -173,9 +173,8 @@ chain of tag comparisons. An enum cannot be passed to or returned from C, nor ca
 because C code could write a tag that names no variant; pass `variant as u32` instead.
 
 Not in this version: guards (`pattern if condition`), ranges (`1..5`), patterns that name struct fields,
-`if let` / `while let`, naming the whole value as well as its parts (`n @ Some(_)`), names inside `|`, and
-generic enums such as `Option<T>` (write `enum MaybeU32 { Some(u32), None }` for the type you need until generics
-arrive).
+`if let` / `while let`, naming the whole value as well as its parts (`n @ Some(_)`), and names inside `|`.
+Generic enums such as `Option<T>` work (see Generics), but there is no ready-made one: you write it.
 
 ## Generics
 
