@@ -1,0 +1,8 @@
+// error: conflicting accesses
+fn id(x: inout i32) -> i32 { return x; }
+fn two(a: i32, b: i32) { }
+fn main() -> i32 {
+    var x = 1;
+    two(x, id(&x));
+    return 0;
+}

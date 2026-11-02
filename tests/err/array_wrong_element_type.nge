@@ -1,0 +1,2 @@
+// error: type mismatch: expected 'u8', found 'i32'
+fn main() -> i32 { let x: i32 = 1; let a: [u8; 2] = [x, x]; return 0; }

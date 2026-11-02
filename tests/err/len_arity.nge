@@ -1,0 +1,2 @@
+// error: 'len' takes one argument
+fn main() -> i32 { let a = [1]; let n = len(a, a); return 0; }

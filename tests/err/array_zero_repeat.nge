@@ -1,0 +1,2 @@
+// error: an array needs at least one element
+fn main() -> i32 { let a = [1; 0]; return 0; }

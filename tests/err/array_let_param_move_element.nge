@@ -1,0 +1,4 @@
+// error: cannot move out of an element
+struct Buf { len: u32, cap: u32 }
+fn first(bufs: [Buf; 2]) -> Buf { return bufs[0]; }
+fn main() -> i32 { return 0; }

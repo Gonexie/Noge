@@ -1,0 +1,2 @@
+// error: cannot cast
+fn main() -> i32 { let a = [1, 2]; let b = a as i32; return 0; }

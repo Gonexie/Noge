@@ -1,0 +1,2 @@
+// error: array length 4294967296 is too large
+fn main() -> i32 { var a: [u8; 4294967296]; return 0; }

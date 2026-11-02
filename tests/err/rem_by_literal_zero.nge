@@ -1,0 +1,2 @@
+// error: division by zero
+fn main() -> i32 { let x: u8 = 5; let y = x % 0; return 0; }

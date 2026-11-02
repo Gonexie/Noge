@@ -1,0 +1,8 @@
+// error: use of moved value 'bufs'
+struct Buf { len: u32, cap: u32 }
+fn main() -> i32 {
+    let bufs = [Buf { len: 1, cap: 2 }, Buf { len: 3, cap: 4 }];
+    let other = bufs;
+    let n = bufs[1].len;
+    return 0;
+}

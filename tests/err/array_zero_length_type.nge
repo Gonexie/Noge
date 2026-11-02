@@ -1,0 +1,2 @@
+// error: an array needs at least one element
+fn main() -> i32 { var a: [i32; 0]; return 0; }

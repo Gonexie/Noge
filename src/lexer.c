@@ -10,6 +10,15 @@ static const char *tok_names[] = {
 
 const char *tok_name(TokKind k) { return tok_names[k]; }
 
+const char *op_name(int op) {
+    switch (op) {
+    case OP_WADD: return "wrapping_add";
+    case OP_WSUB: return "wrapping_sub";
+    case OP_WMUL: return "wrapping_mul";
+    default: return tok_names[op];
+    }
+}
+
 static const struct { const char *s; TokKind k; } keywords[] = {
     {"fn", T_FN},       {"struct", T_STRUCT}, {"let", T_LET},     {"var", T_VAR},
     {"if", T_IF},       {"else", T_ELSE},     {"while", T_WHILE}, {"return", T_RETURN},
@@ -20,10 +29,12 @@ static const struct { const char *s; TokKind k; } keywords[] = {
 /* two-character operators first so they win over their prefixes */
 static const struct { const char *s; TokKind k; } puncts[] = {
     {"->", T_ARROW}, {"==", T_EQ},  {"!=", T_NE},     {"<=", T_LE},    {">=", T_GE},
-    {"&&", T_ANDAND}, {"||", T_OROR}, {"(", T_LPAREN}, {")", T_RPAREN}, {"{", T_LBRACE},
+    {"&&", T_ANDAND}, {"||", T_OROR}, {"<<", T_SHL},  {">>", T_SHR},
+    {"(", T_LPAREN}, {")", T_RPAREN}, {"{", T_LBRACE},
     {"}", T_RBRACE}, {",", T_COMMA}, {":", T_COLON},  {";", T_SEMI},   {".", T_DOT},
     {"=", T_ASSIGN}, {"<", T_LT},    {">", T_GT},     {"+", T_PLUS},   {"-", T_MINUS},
     {"*", T_STAR},   {"/", T_SLASH}, {"%", T_PERCENT}, {"!", T_BANG},  {"&", T_AMP},
+    {"|", T_PIPE},   {"^", T_CARET}, {"~", T_TILDE},   {"[", T_LBRACKET}, {"]", T_RBRACKET},
 };
 
 static int digit_val(int c) {

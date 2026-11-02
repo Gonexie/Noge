@@ -1,0 +1,2 @@
+// error: 'len' needs an array, found 'i32'
+fn main() -> i32 { let x = 1; let n = len(x); return 0; }

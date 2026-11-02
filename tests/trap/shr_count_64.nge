@@ -1,0 +1,9 @@
+// trap: 6: shift amount out of range
+fn main() -> i32 {
+    print(1);
+    let a: i64 = 1;
+    let n: i64 = 64;
+    let r = a >> n;   // !
+    print(2);
+    return 0;
+}

@@ -1,0 +1,2 @@
+// error: type mismatch: expected 'u8', found 'u32'
+fn main() -> i32 { let x: u8 = 1; let n: u32 = 2; let y = x << n; return 0; }

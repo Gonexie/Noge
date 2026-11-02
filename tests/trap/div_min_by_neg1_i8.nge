@@ -1,0 +1,9 @@
+// trap: 6: integer overflow
+fn main() -> i32 {
+    print(1);
+    let a: i8 = -128;
+    let m: i8 = -1;
+    let r = a / m;   // !
+    print(2);
+    return 0;
+}

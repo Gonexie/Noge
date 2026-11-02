@@ -1,0 +1,72 @@
+// An arena with index handles, written in the language itself: a fixed array plus a length.
+copy struct Node { value: i32, next: i32 }         // next is an index into the arena, -1 for "none"
+
+struct Arena { items: [Node; 8], len: u32 }
+
+fn arena_new() -> Arena {
+    return Arena { items: [Node { value: 0, next: -1 }; 8], len: 0 };
+}
+
+// returns the new node's index, or -1 when the arena is full
+fn alloc(a: inout Arena, value: i32, next: i32) -> i32 {
+    if a.len >= len(a.items) { return -1; }
+    let i = a.len;
+    a.items[i] = Node { value: value, next: next };
+    a.len = a.len + 1;
+    return i as i32;
+}
+
+fn list_sum(a: Arena, head: i32) -> i32 {
+    var total = 0;
+    var cur = head;
+    while cur >= 0 {
+        let n = a.items[cur];
+        total = total + n.value;
+        cur = n.next;
+    }
+    return total;
+}
+
+fn sort(v: inout [i32; 5]) {
+    var i = 0;
+    while i < len(v) {
+        var j = 0;
+        while j + 1 < len(v) - i {
+            if v[j] > v[j + 1] {
+                let t = v[j];
+                v[j] = v[j + 1];
+                v[j + 1] = t;
+            }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+}
+
+fn main() -> i32 {
+    var ar = arena_new();
+    var head = -1;
+    var k = 1;
+    while k <= 3 {
+        head = alloc(&ar, k * 10, head);
+        k = k + 1;
+    }
+    print(list_sum(ar, head));                     // 30 + 20 + 10 = 60
+    print(ar.len as i32);                          // 3
+    while k <= 20 {
+        let h = alloc(&ar, k, head);
+        if h >= 0 { head = h; }
+        k = k + 1;
+    }
+    print(ar.len as i32);                          // 8: full
+    print(alloc(&ar, 1, -1));                      // -1
+
+    var v = [5, 2, 9, 1, 7];
+    sort(&v);
+    print(v[0]);
+    print(v[1]);
+    print(v[2]);
+    print(v[3]);
+    print(v[4]);
+    return 0;
+}

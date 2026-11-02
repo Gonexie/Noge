@@ -1,0 +1,21 @@
+fn main() -> i32 {
+    let a: u8 = 250;
+    print(wrapping_add(a, 10) as i32);         // 260 mod 256 = 4
+    let b: u8 = 3;
+    print(wrapping_sub(b, 5) as i32);          // 254
+    let c: i8 = 100;
+    print(wrapping_add(c, 100) as i32);        // 200 - 256 = -56
+    let d: i32 = 2147483647;
+    print(wrapping_add(d, 1));                 // -2147483648
+    let e: i32 = -2147483648;
+    print(wrapping_sub(e, 1));                 // 2147483647
+    let f: u16 = 65535;
+    print(wrapping_mul(f, f) as i32);          // 1
+    let g: u32 = 4000000000;
+    print(wrapping_add(g, g) as i32);          // 3705032704 as i32 = -589934592
+    let h: i64 = 9223372036854775807;
+    print(wrapping_add(h, 1) as i32);          // the low 32 bits of i64::MIN: 0
+    let i: i8 = -128;
+    print(wrapping_mul(i, i) as i32);          // 16384 mod 256 = 0
+    return 0;
+}

@@ -1,0 +1,2 @@
+// error: does not fit in 'u8'
+fn main() -> i32 { let a = [0; 300]; let n: u8 = len(a); return 0; }

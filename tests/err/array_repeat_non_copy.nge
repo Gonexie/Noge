@@ -1,0 +1,3 @@
+// error: is not copy
+struct Buf { len: u32, cap: u32 }
+fn main() -> i32 { let a = [Buf { len: 1, cap: 2 }; 3]; return 0; }

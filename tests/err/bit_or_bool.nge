@@ -1,0 +1,2 @@
+// error: needs integer operands
+fn main() -> i32 { let b = true | false; return 0; }

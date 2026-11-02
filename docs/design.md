@@ -97,7 +97,7 @@ Notes
 ## Milestones
 1. Lexer, parser, type check for ints, structs, functions. Emit C, run hello-world on host. **Done** (see README).
 2. Init/move/exclusivity pass, with a negative test suite of programs that must be rejected. **Done** (see below).
-3. Arrays, arenas, bounds checks, overflow traps.
+3. Arrays, bounds checks, overflow traps, an IR with a fixed evaluation order. **Done** (see below). Arena/handle types moved to the generics milestone.
 4. C FFI with `unsafe`; build a blinky for a real target (e.g. ARM Cortex-M via arm-none-eabi-gcc).
 5. Enums and pattern matching; then generics.
 
@@ -114,14 +114,40 @@ Notes
 - **`set` mode added** (callee must initialize; caller may pass an initialized or uninitialized place).
   `var x: T;` declares without initializing; `let` always needs an initializer, because "assigned exactly once"
   would need a second analysis.
-- **Exclusivity is stricter than Hylo's.** Hylo evaluates arguments left to right and only conflicts with accesses
-  that are live at the same time. Because the C we emit leaves evaluation order unspecified, any two sibling
-  operands, arguments or literal fields whose accesses overlap must both be reads, however deeply nested. When
-  milestone 3 lowers to an IR with explicit left-to-right temporaries this can be relaxed.
+- **Exclusivity started out stricter than Hylo's** (any two sibling operands that overlapped had to be reads,
+  because C leaves evaluation order unspecified). Milestone 3 fixes the order, so it is now Hylo's rule.
 - **`sink` parameters are immutable bindings** (take `var y = x;` to modify). `let` parameters cannot be moved from.
 - Declared-but-unassigned variables are zero-initialized in the emitted C, so a bug in the analysis cannot read
   garbage and optimizers do not warn about maybe-uninitialized reads.
 - Dropping a non-copy value unused is allowed for now. Revisit when types with destructors or linear resources exist.
+
+## Decisions made in milestone 3
+
+- **An IR between the AST and C** (`src/ir.h`): structured three-address code, so `if` and `while` stay nested and
+  every run-time check is an explicit instruction. Lowering decides the evaluation order (left to right; an
+  assignment evaluates its right side first, then the left place), so the C we print has one operation per
+  statement and never depends on C's unspecified order. A variable operand is only copied to a temporary when a
+  later sibling contains a call that could change it.
+- **Exclusivity is Hylo's rule**: `let`, `inout` and `set` arguments that name a place borrow it from their argument
+  until the call returns; a `sink` argument is taken when evaluated. An access conflicts with a live borrow it
+  overlaps unless both are reads. This allows `q.x + bump(&q)` and `f(g(&a), &a)`, which milestone 2 rejected.
+- **An array is one unit for flow analysis** (a single leaf): its elements are chosen at run time, so an element can
+  be neither partially initialized nor moved out, and two element borrows always count as overlapping. A write to
+  an element needs a whole array; `[v; N]` needs a copy element type.
+- **Arrays are wrapped in a C struct** (`struct arr_i32_4 { int32_t v[4]; }`), so they can be assigned, passed and
+  returned by value like any struct. `let` parameters of struct or array type are passed as `const T *`; `sink`
+  parameters stay by value because the caller's copy may change before the callee runs.
+- **Run-time checks are inline statements, not helper calls** (no call overhead at `-O0`, and each site carries its
+  own line number). Overflow uses `__builtin_*_overflow`; `--no-builtins` prints widened or pre-condition tests
+  instead. The failure hook is `NOGE_TRAP(kind, line)`, overridable at C compile time.
+- **Shifts and `as`** work on the unsigned bit pattern: `<<` drops shifted-out bits, `>>` is arithmetic for signed
+  types, both trap on a bad count; `as` truncates or sign-extends. `wrapping_*` are operators with modular results.
+- **`len(a)` is a constant folded by the checker** and takes its integer type from context, so `i < len(a)` works
+  for any index type. A literal index, zero divisor or shift count that is certainly wrong is a compile error.
+- **Arenas are a library pattern for now.** `Arena<T, N>` and `Id<T>` need generics; a struct with an array and a
+  length does the job today (`tests/ok/arena.nge`).
+- **Dictionary lookups use hash tables.** The profile of a 68,000-line program showed 47% of the time in linear
+  name lookups, which were quadratic in the number of declarations.
 
 ## Open questions
 - Do we need Hylo-style `subscript` projections to access into containers without copying, or is `inout` on paths plus arenas enough?

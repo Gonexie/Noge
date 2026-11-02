@@ -1,0 +1,2 @@
+// error: use of uninitialized value 'a'
+fn main() -> i32 { var a: [i32; 3]; print(a[0]); return 0; }

@@ -1,4 +1,4 @@
-// error: conflicting accesses
+// error: use of moved value 'a'
 fn two(a: inout i32, b: inout i32) { }
 fn one_rw(a: inout i32, b: i32) { }
 fn eat_s(a: sink Buf, b: sink Buf) { }

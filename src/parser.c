@@ -35,7 +35,22 @@ static Node *mk(NodeKind k, int line) {
     return n;
 }
 
-static Str parse_type_name(void) { return expect(T_IDENT)->text; }
+/* Type  ::=  Name  |  "[" Type ";" IntLiteral "]" */
+static Node *parse_type(void) {
+    Token *t = cur();
+    Node *n = mk(N_TYPE, t->line);
+    if (t->kind == T_LBRACKET) {
+        advance();
+        n->op = 1; /* array */
+        n->a = parse_type();
+        expect(T_SEMI);
+        n->ival = expect(T_INT)->ival;
+        expect(T_RBRACKET);
+        return n;
+    }
+    n->name = expect(T_IDENT)->text;
+    return n;
+}
 
 static Node *parse_expr(void);
 static Node *parse_block(void);
@@ -54,6 +69,30 @@ static Node *parse_primary(void) {
         advance();
         Node *n = mk(N_BOOL, t->line);
         n->ival = t->kind == T_TRUE;
+        return n;
+    }
+    case T_LBRACKET: { /* [a, b, c]  or  [value; N] */
+        advance();
+        if (cur()->kind == T_RBRACKET) die(t->line, "an array needs at least one element");
+        int save = nolit;
+        nolit = 0;
+        Node *first = parse_expr();
+        Node *n;
+        if (accept(T_SEMI)) {
+            n = mk(N_REPEAT, t->line);
+            n->a = first;
+            n->ival = expect(T_INT)->ival;
+        } else {
+            n = mk(N_ARRAY, t->line);
+            n->a = first;
+            Node **tail = &first->next;
+            while (accept(T_COMMA) && cur()->kind != T_RBRACKET) {
+                *tail = parse_expr();
+                tail = &(*tail)->next;
+            }
+        }
+        nolit = save;
+        expect(T_RBRACKET);
         return n;
     }
     case T_LPAREN: {
@@ -117,12 +156,22 @@ static Node *parse_primary(void) {
 
 static Node *parse_postfix(void) {
     Node *e = parse_primary();
-    while (cur()->kind == T_DOT) {
-        int line = advance()->line;
-        Token *f = expect(T_IDENT);
-        Node *n = mk(N_MEMBER, line);
-        n->a = e;
-        n->name = f->text;
+    while (cur()->kind == T_DOT || cur()->kind == T_LBRACKET) {
+        int line = cur()->line;
+        Node *n;
+        if (advance()->kind == T_DOT) {
+            n = mk(N_MEMBER, line);
+            n->a = e;
+            n->name = expect(T_IDENT)->text;
+        } else {
+            int save = nolit;
+            nolit = 0;
+            n = mk(N_INDEX, line);
+            n->a = e;
+            n->b = parse_expr();
+            nolit = save;
+            expect(T_RBRACKET);
+        }
         e = n;
     }
     return e;
@@ -130,7 +179,7 @@ static Node *parse_postfix(void) {
 
 static Node *parse_unary(void) {
     Token *t = cur();
-    if (t->kind == T_MINUS || t->kind == T_BANG) {
+    if (t->kind == T_MINUS || t->kind == T_BANG || t->kind == T_TILDE) {
         advance();
         Node *n = mk(N_UN, t->line);
         n->op = t->kind;
@@ -152,7 +201,7 @@ static Node *parse_cast(void) {
         int line = advance()->line;
         Node *n = mk(N_CAST, line);
         n->a = e;
-        n->tyname = parse_type_name();
+        n->ty = parse_type();
         e = n;
     }
     return e;
@@ -164,8 +213,12 @@ static int prec(TokKind k) {
     case T_ANDAND: return 2;
     case T_EQ: case T_NE: return 3;
     case T_LT: case T_LE: case T_GT: case T_GE: return 4;
-    case T_PLUS: case T_MINUS: return 5;
-    case T_STAR: case T_SLASH: case T_PERCENT: return 6;
+    case T_PIPE: return 5;
+    case T_CARET: return 6;
+    case T_AMP: return 7;
+    case T_SHL: case T_SHR: return 8;
+    case T_PLUS: case T_MINUS: return 9;
+    case T_STAR: case T_SLASH: case T_PERCENT: return 10;
     default: return 0;
     }
 }
@@ -215,8 +268,8 @@ static Node *parse_stmt(void) {
         Node *n = mk(N_LET, t->line);
         n->op = t->kind == T_VAR;
         n->name = expect(T_IDENT)->text;
-        if (accept(T_COLON)) n->tyname = parse_type_name();
-        if (!n->tyname.n) {
+        if (accept(T_COLON)) n->ty = parse_type();
+        if (!n->ty) {
             expect(T_ASSIGN);
             n->a = parse_expr();
         } else if (accept(T_ASSIGN)) {
@@ -284,7 +337,7 @@ static Node *parse_struct(bool is_copy) {
         expect(T_COLON);
         Node *fd = mk(N_FDECL, f->line);
         fd->name = f->text;
-        fd->tyname = parse_type_name();
+        fd->ty = parse_type();
         *tail = fd;
         tail = &fd->next;
         if (!accept(T_COMMA)) break;
@@ -310,13 +363,13 @@ static Node *parse_fn(void) {
         else if (accept(T_SINK)) p->op = M_SINK;
         else if (accept(T_SET)) p->op = M_SET;
         else accept(T_LET);
-        p->tyname = parse_type_name();
+        p->ty = parse_type();
         *tail = p;
         tail = &p->next;
         if (!accept(T_COMMA)) break;
     }
     expect(T_RPAREN);
-    if (accept(T_ARROW)) f->tyname = parse_type_name();
+    if (accept(T_ARROW)) f->ty = parse_type();
     f->b = parse_block();
     return f;
 }

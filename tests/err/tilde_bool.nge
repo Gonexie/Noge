@@ -1,0 +1,2 @@
+// error: '~' needs an integer, found 'bool'
+fn main() -> i32 { let b = ~true; return 0; }

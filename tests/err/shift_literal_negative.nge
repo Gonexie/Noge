@@ -1,0 +1,2 @@
+// error: shift amount -1 is out of range
+fn main() -> i32 { let x = 5; let y = x >> -1; return 0; }

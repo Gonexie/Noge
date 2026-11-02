@@ -1,0 +1,28 @@
+// Values right at the edge of each type: nothing here overflows, so nothing traps.
+fn main() -> i32 {
+    let a: i8 = 127;
+    print((a - 1) as i32);                     // 126
+    let b: i8 = -128;
+    print((b + 1) as i32);                     // -127
+    let c: u8 = 255;
+    print((c - 255) as i32);                   // 0
+    let d: i32 = 2147483647;
+    print(d - 1);                              // 2147483646
+    let e: i32 = -2147483648;
+    print(e + 2147483647);                     // -1
+    let f: i64 = 4611686018427387904;
+    print((f / 4611686018427387904) as i32);   // 1
+    let g: u64 = 18446744073709551615;
+    print((g / 4294967296) as i32);            // 4294967295 as i32 = -1
+    let h: u32 = 65536;
+    print((h * 65535) as i32);                 // 4294901760 as i32 = -65536
+    let m: i64 = -9223372036854775808;
+    print((m + 1) as i32);                     // low 32 bits of -9223372036854775807: 1
+    let n: u64 = 4294967296;
+    print((n * 4294967295 / 4294967296) as i32); // 4294967295 as i32 = -1
+    print(7 / 2);                              // division truncates toward zero
+    print(-7 / 2);
+    print(-7 % 3);
+    print(7 % -3);
+    return 0;
+}

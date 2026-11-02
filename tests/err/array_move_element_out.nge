@@ -1,0 +1,3 @@
+// error: cannot move out of an element of array 'bufs'
+struct Buf { len: u32, cap: u32 }
+fn main() -> i32 { let bufs = [Buf { len: 1, cap: 2 }, Buf { len: 3, cap: 4 }]; let b = bufs[0]; return 0; }

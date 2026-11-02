@@ -1,0 +1,2 @@
+// error: 'wrapping_add' takes two arguments
+fn main() -> i32 { let x = wrapping_add(1); return 0; }

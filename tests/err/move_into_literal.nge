@@ -1,4 +1,4 @@
-// error: conflicting accesses
+// error: use of moved value 'a'
 struct Buf { len: u32, cap: u32 }
 struct Pair { a: Buf, b: Buf }
 fn eat(b: sink Buf) { }

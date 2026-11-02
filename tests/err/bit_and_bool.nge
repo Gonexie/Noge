@@ -1,0 +1,2 @@
+// error: operator '&' needs integer operands, found 'bool'
+fn main() -> i32 { let b = true & false; return 0; }

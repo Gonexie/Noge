@@ -2,22 +2,61 @@
 #include "noge.h"
 
 static Type prims[] = {
-    {TY_UNIT, "unit", 0, false, NULL, "void", true, 0},
-    {TY_BOOL, "bool", 1, false, NULL, "bool", true, 1},
-    {TY_INT, "i8", 8, true, NULL, "int8_t", true, 1},
-    {TY_INT, "i16", 16, true, NULL, "int16_t", true, 1},
-    {TY_INT, "i32", 32, true, NULL, "int32_t", true, 1},
-    {TY_INT, "i64", 64, true, NULL, "int64_t", true, 1},
-    {TY_INT, "u8", 8, false, NULL, "uint8_t", true, 1},
-    {TY_INT, "u16", 16, false, NULL, "uint16_t", true, 1},
-    {TY_INT, "u32", 32, false, NULL, "uint32_t", true, 1},
-    {TY_INT, "u64", 64, false, NULL, "uint64_t", true, 1},
+    {TY_UNIT, "unit", 0, false, NULL, "void", true, 0, NULL, 0, NULL, 0},
+    {TY_BOOL, "bool", 1, false, NULL, "bool", true, 1, NULL, 0, NULL, 0},
+    {TY_INT, "i8", 8, true, NULL, "int8_t", true, 1, NULL, 0, NULL, 0},
+    {TY_INT, "i16", 16, true, NULL, "int16_t", true, 1, NULL, 0, NULL, 0},
+    {TY_INT, "i32", 32, true, NULL, "int32_t", true, 1, NULL, 0, NULL, 0},
+    {TY_INT, "i64", 64, true, NULL, "int64_t", true, 1, NULL, 0, NULL, 0},
+    {TY_INT, "u8", 8, false, NULL, "uint8_t", true, 1, NULL, 0, NULL, 0},
+    {TY_INT, "u16", 16, false, NULL, "uint16_t", true, 1, NULL, 0, NULL, 0},
+    {TY_INT, "u32", 32, false, NULL, "uint32_t", true, 1, NULL, 0, NULL, 0},
+    {TY_INT, "u64", 64, false, NULL, "uint64_t", true, 1, NULL, 0, NULL, 0},
 };
 #define NPRIMS ((int)(sizeof prims / sizeof *prims))
 Type *ty_unit = &prims[0], *ty_bool = &prims[1], *ty_i32 = &prims[4];
 
+Type *g_array_types; /* every array type, in creation order */
+
 static Node *prog;
 static Node builtin_print, builtin_print_param;
+
+/* ---- name tables: structs and functions are looked up by name all the time ---- */
+typedef struct { Str key; Node *val; } Slot;
+typedef struct { Slot *slots; size_t cap; } Map;
+static Map struct_map, fn_map;
+
+static uint32_t hash_str(Str s) { /* FNV-1a */
+    uint32_t h = 2166136261u;
+    for (int i = 0; i < s.n; i++) h = (h ^ (unsigned char)s.p[i]) * 16777619u;
+    return h;
+}
+
+static void map_init(Map *m, size_t expected) {
+    size_t cap = 16;
+    while (cap < expected * 2) cap *= 2;
+    m->cap = cap;
+    m->slots = arena_alloc(&g_arena, cap * sizeof(Slot));
+}
+
+static Node *map_get(Map *m, Str key) {
+    for (size_t i = hash_str(key) & (m->cap - 1);; i = (i + 1) & (m->cap - 1)) {
+        if (!m->slots[i].val) return NULL;
+        if (str_eq(m->slots[i].key, key)) return m->slots[i].val;
+    }
+}
+
+/* false if the name is already there */
+static bool map_put(Map *m, Str key, Node *val) {
+    for (size_t i = hash_str(key) & (m->cap - 1);; i = (i + 1) & (m->cap - 1)) {
+        if (!m->slots[i].val) {
+            m->slots[i].key = key;
+            m->slots[i].val = val;
+            return true;
+        }
+        if (str_eq(m->slots[i].key, key)) return false;
+    }
+}
 
 /* ---- locals ---- */
 typedef struct {
@@ -52,18 +91,41 @@ static int declare(int line, Str name, Type *t, int is_mut, int by_ptr) {
 }
 
 /* ---- types ---- */
-static Node *find_struct(Str name) {
-    for (Node *d = prog; d; d = d->next)
-        if (d->kind == N_STRUCT && str_eq(d->name, name)) return d;
-    return NULL;
+static Node *find_struct(Str name) { return map_get(&struct_map, name); }
+
+/* Array types are interned, so two spellings of [i32; 4] are the same Type. */
+static Type *array_type(Type *elem, uint64_t len) {
+    Type **tail = &g_array_types;
+    for (; *tail; tail = &(*tail)->next_array)
+        if ((*tail)->elem == elem && (*tail)->len == len) return *tail;
+    Type *t = ARENA_NEW(&g_arena, Type);
+    t->kind = TY_ARRAY;
+    t->elem = elem;
+    t->len = len;
+    t->is_copy = elem->is_copy;
+    t->nleaves = 1; /* flow treats an array as one unit: elements are reached by a run-time index */
+    size_t n = strlen(elem->name) + strlen(elem->cname) + 64;
+    char *name = arena_alloc(&g_arena, n), *cname = arena_alloc(&g_arena, n);
+    snprintf(name, n, "[%s; %llu]", elem->name, (unsigned long long)len);
+    snprintf(cname, n, "arr_%s_%llu", elem->kind == TY_ARRAY ? elem->cname : elem->name, (unsigned long long)len);
+    t->name = name;
+    t->cname = cname;
+    *tail = t;
+    return t;
 }
 
-static Type *resolve_type(Str name, int line) {
+static Type *resolve_type(Node *ty) {
+    if (ty->op) { /* [T; N] */
+        Type *elem = resolve_type(ty->a);
+        if (ty->ival == 0) die(ty->line, "an array needs at least one element");
+        if (ty->ival > 0x7fffffffu) die(ty->line, "array length %llu is too large", (unsigned long long)ty->ival);
+        return array_type(elem, ty->ival);
+    }
     for (int i = 1; i < NPRIMS; i++)
-        if (str_is(name, prims[i].name)) return &prims[i];
-    Node *s = find_struct(name);
+        if (str_is(ty->name, prims[i].name)) return &prims[i];
+    Node *s = find_struct(ty->name);
     if (s) return s->type;
-    die(line, "unknown type '%.*s'", SF(name));
+    die(ty->line, "unknown type '%.*s'", SF(ty->name));
 }
 
 static void expect_type(int line, Type *want, Type *got) {
@@ -77,31 +139,37 @@ static Node *find_field(Node *s, Str name) {
     return NULL;
 }
 
+static bool is_intrinsic(Str name) {
+    return str_is(name, "len") || str_is(name, "wrapping_add") || str_is(name, "wrapping_sub") ||
+           str_is(name, "wrapping_mul");
+}
+
 static Node *lookup_fn(Str name) {
-    for (Node *d = prog; d; d = d->next)
-        if (d->kind == N_FN && str_eq(d->name, name)) return d;
+    Node *f = map_get(&fn_map, name);
+    if (f) return f;
     if (str_eq(name, builtin_print.name)) return &builtin_print;
     return NULL;
 }
 
 /* ---- places ---- */
 static bool is_place(Node *n) {
-    while (n->kind == N_MEMBER) n = n->a;
+    while (n->kind == N_MEMBER || n->kind == N_INDEX) n = n->a;
     return n->kind == N_NAME;
 }
 
 static void require_mutable_place(Node *n, const char *action) {
     if (!is_place(n)) die(n->line, "only a variable or field can be %s", action);
     Node *root = n;
-    while (root->kind == N_MEMBER) root = root->a;
+    while (root->kind == N_MEMBER || root->kind == N_INDEX) root = root->a;
     if (!root->mut)
         die(n->line, "'%.*s' is read-only (declare it with 'var', or take it as an 'inout' parameter), so it cannot be %s",
             SF(root->name), action);
 }
 
 /* ---- expressions ---- */
-static bool is_lit(Node *n) {
-    return n->kind == N_INT || (n->kind == N_UN && n->op == T_MINUS && n->a->kind == N_INT);
+static bool is_lit(Node *n) { /* a constant whose integer type comes from context */
+    return n->kind == N_INT || (n->kind == N_UN && n->op == T_MINUS && n->a->kind == N_INT) ||
+           (n->kind == N_CALL && str_is(n->name, "len"));
 }
 
 static Type *check_expr(Node *n, Type *expect);
@@ -149,6 +217,34 @@ static Type *check_call(Node *n) {
     return fn->type;
 }
 
+static Type *check_expr_inner(Node *n, Type *expect);
+
+/* len(a) is a compile-time constant; wrapping_add/sub/mul are plain operators with modular results. */
+static Type *check_intrinsic(Node *n, Type *expect) {
+    int argc = 0;
+    for (Node *a = n->a; a; a = a->next) argc++;
+    if (str_is(n->name, "len")) {
+        if (argc != 1) die(n->line, "'len' takes one argument, an array");
+        Node *a = n->a;
+        if (!is_place(a)) die(a->line, "'len' takes an array variable, field or element");
+        Type *t = check_expr(a, NULL);
+        if (t->kind != TY_ARRAY) die(a->line, "'len' needs an array, found '%s'", t->name);
+        n->kind = N_INT; /* folded: the array itself is not evaluated */
+        n->ival = t->len;
+        n->op = 0;
+        n->a = NULL;
+        return check_int_literal(n, expect);
+    }
+    if (argc != 2) die(n->line, "'%.*s' takes two arguments", SF(n->name));
+    Node *x = n->a, *y = x->next;
+    x->next = NULL;
+    n->kind = N_BIN;
+    n->op = str_is(n->name, "wrapping_add") ? OP_WADD : str_is(n->name, "wrapping_sub") ? OP_WSUB : OP_WMUL;
+    n->a = x;
+    n->b = y;
+    return check_expr_inner(n, expect);
+}
+
 static Type *check_expr_inner(Node *n, Type *expect) {
     switch (n->kind) {
     case N_INT:
@@ -172,7 +268,41 @@ static Type *check_expr_inner(Node *n, Type *expect) {
         return f->type;
     }
     case N_CALL:
-        return check_call(n);
+        return is_intrinsic(n->name) ? check_intrinsic(n, expect) : check_call(n);
+    case N_INDEX: {
+        if (!is_place(n->a)) die(n->line, "only an array variable, field or element can be indexed");
+        Type *at = check_expr(n->a, NULL);
+        if (at->kind != TY_ARRAY) die(n->line, "cannot index a value of type '%s'", at->name);
+        Type *it = check_expr(n->b, NULL);
+        if (it->kind != TY_INT) die(n->b->line, "an array index must be an integer, found '%s'", it->name);
+        if (n->b->kind == N_INT && ((n->b->op && n->b->ival) || n->b->ival >= at->len))
+            die(n->b->line, "index %s%llu is out of bounds for an array of length %llu", n->b->op ? "-" : "",
+                (unsigned long long)n->b->ival, (unsigned long long)at->len);
+        return at->elem;
+    }
+    case N_ARRAY: {
+        Type *want = (expect && expect->kind == TY_ARRAY) ? expect->elem : NULL;
+        Type *elem = want;
+        uint64_t cnt = 0;
+        for (Node *e = n->a; e; e = e->next, cnt++) {
+            Type *t = check_expr(e, elem);
+            if (!elem) elem = t;
+            expect_type(e->line, elem, t);
+        }
+        if (elem == ty_unit) die(n->line, "an array cannot hold 'unit' values");
+        return array_type(elem, cnt);
+    }
+    case N_REPEAT: {
+        Type *want = (expect && expect->kind == TY_ARRAY) ? expect->elem : NULL;
+        Type *t = check_expr(n->a, want);
+        if (want) expect_type(n->a->line, want, t);
+        if (t == ty_unit) die(n->line, "an array cannot hold 'unit' values");
+        if (!t->is_copy)
+            die(n->line, "'[value; N]' copies the value N times, but '%s' is not copy", t->name);
+        if (n->ival == 0) die(n->line, "an array needs at least one element");
+        if (n->ival > 0x7fffffffu) die(n->line, "array length %llu is too large", (unsigned long long)n->ival);
+        return array_type(t, n->ival);
+    }
     case N_LIT: {
         Node *s = find_struct(n->name);
         if (!s) die(n->line, "unknown struct '%.*s'", SF(n->name));
@@ -194,7 +324,7 @@ static Type *check_expr_inner(Node *n, Type *expect) {
     }
     case N_CAST: {
         Type *from = check_expr(n->a, NULL);
-        Type *to = resolve_type(n->tyname, n->line);
+        Type *to = resolve_type(n->ty);
         bool ok = (from == to) || ((from->kind == TY_INT || from->kind == TY_BOOL) && to->kind == TY_INT);
         if (!ok) die(n->line, "cannot cast '%s' to '%s'", from->name, to->name);
         return to;
@@ -212,6 +342,8 @@ static Type *check_expr_inner(Node *n, Type *expect) {
         Type *t = check_expr(n->a, n->op == T_BANG ? ty_bool : expect);
         if (n->op == T_BANG) {
             if (t != ty_bool) die(n->line, "'!' needs 'bool', found '%s'", t->name);
+        } else if (n->op == T_TILDE) {
+            if (t->kind != TY_INT) die(n->line, "'~' needs an integer, found '%s'", t->name);
         } else if (t->kind != TY_INT || !t->is_signed) {
             die(n->line, "unary '-' needs a signed integer, found '%s'", t->name);
         }
@@ -220,7 +352,7 @@ static Type *check_expr_inner(Node *n, Type *expect) {
     case N_ADDR:
         die(n->line, "'&' is only allowed on arguments for inout or set parameters");
     case N_BIN: {
-        TokKind op = (TokKind)n->op;
+        int op = n->op;
         bool logic = op == T_ANDAND || op == T_OROR;
         bool cmp = op == T_EQ || op == T_NE || op == T_LT || op == T_LE || op == T_GT || op == T_GE;
         Type *ex = logic ? ty_bool : (cmp ? NULL : expect);
@@ -234,14 +366,20 @@ static Type *check_expr_inner(Node *n, Type *expect) {
         }
         expect_type(n->b->line, lt, rt);
         if (logic) {
-            if (lt != ty_bool) die(n->line, "'%s' needs 'bool' operands, found '%s'", tok_name(op), lt->name);
+            if (lt != ty_bool) die(n->line, "'%s' needs 'bool' operands, found '%s'", op_name(op), lt->name);
             return ty_bool;
         }
         if (op == T_EQ || op == T_NE) {
             if (lt->kind != TY_INT && lt != ty_bool) die(n->line, "cannot compare values of type '%s'", lt->name);
             return ty_bool;
         }
-        if (lt->kind != TY_INT) die(n->line, "operator %s needs integer operands, found '%s'", tok_name(op), lt->name);
+        if (lt->kind != TY_INT) die(n->line, "operator %s needs integer operands, found '%s'", op_name(op), lt->name);
+        if ((op == T_SLASH || op == T_PERCENT) && n->b->kind == N_INT && n->b->ival == 0)
+            die(n->line, "division by zero");
+        if ((op == T_SHL || op == T_SHR) && n->b->kind == N_INT &&
+            ((n->b->op && n->b->ival) || n->b->ival >= (uint64_t)lt->bits))
+            die(n->line, "shift amount %s%llu is out of range for '%s' (0 to %d)", n->b->op ? "-" : "",
+                (unsigned long long)n->b->ival, lt->name, lt->bits - 1);
         return cmp ? ty_bool : lt;
     }
     default:
@@ -271,9 +409,9 @@ static void check_stmt(Node *s) {
         if (!s->a) { /* declared now, assigned later (var only) */
             if (!s->op)
                 die(s->line, "'let' binding '%.*s' needs an initializer (use 'var' to assign it later)", SF(s->name));
-            t = resolve_type(s->tyname, s->line);
-        } else if (s->tyname.n) {
-            t = resolve_type(s->tyname, s->line);
+            t = resolve_type(s->ty);
+        } else if (s->ty) {
+            t = resolve_type(s->ty);
             expect_type(s->a->line, t, check_expr(s->a, t));
         } else {
             t = check_expr(s->a, NULL);
@@ -337,8 +475,11 @@ static void visit_struct(Node *s) { /* reject structs that contain themselves by
     if (s->ival == 1) die(s->line, "struct '%.*s' contains itself", SF(s->name));
     if (s->ival == 2) return;
     s->ival = 1;
-    for (Node *f = s->a; f; f = f->next)
-        if (f->type->kind == TY_STRUCT) visit_struct(f->type->decl);
+    for (Node *f = s->a; f; f = f->next) {
+        Type *ft = f->type;
+        while (ft->kind == TY_ARRAY) ft = ft->elem; /* an array of S inside S is just as infinite */
+        if (ft->kind == TY_STRUCT) visit_struct(ft->decl);
+    }
     s->ival = 2;
 }
 
@@ -379,10 +520,16 @@ void check_program(Node *program) {
     builtin_print.a = &builtin_print_param;
 
     /* 1. declare struct and function names */
+    size_t nstructs = 0, nfns = 0;
     for (Node *d = prog; d; d = d->next) {
-        for (Node *e = prog; e != d; e = e->next)
-            if (e->kind == d->kind && str_eq(e->name, d->name))
-                die(d->line, "'%.*s' is defined twice", SF(d->name));
+        if (d->kind == N_STRUCT) nstructs++;
+        else nfns++;
+    }
+    map_init(&struct_map, nstructs);
+    map_init(&fn_map, nfns);
+    for (Node *d = prog; d; d = d->next) {
+        if (!map_put(d->kind == N_STRUCT ? &struct_map : &fn_map, d->name, d))
+            die(d->line, "'%.*s' is defined twice", SF(d->name));
         if (d->kind == N_STRUCT) {
             for (int i = 0; i < NPRIMS; i++)
                 if (str_is(d->name, prims[i].name)) die(d->line, "'%.*s' is a builtin type", SF(d->name));
@@ -396,8 +543,8 @@ void check_program(Node *program) {
             t->decl = d;
             t->is_copy = d->op != 0;
             d->type = t;
-        } else if (str_eq(d->name, builtin_print.name)) {
-            die(d->line, "'print' is a builtin function");
+        } else if (str_eq(d->name, builtin_print.name) || is_intrinsic(d->name)) {
+            die(d->line, "'%.*s' is a builtin function", SF(d->name));
         }
     }
 
@@ -407,7 +554,7 @@ void check_program(Node *program) {
         for (Node *f = d->a; f; f = f->next) {
             for (Node *g = d->a; g != f; g = g->next)
                 if (str_eq(g->name, f->name)) die(f->line, "field '%.*s' declared twice", SF(f->name));
-            f->type = resolve_type(f->tyname, f->line);
+            f->type = resolve_type(f->ty);
         }
     }
     for (Node *d = prog; d; d = d->next)
@@ -429,9 +576,9 @@ void check_program(Node *program) {
         for (Node *p = d->a; p; p = p->next) {
             for (Node *q = d->a; q != p; q = q->next)
                 if (str_eq(q->name, p->name)) die(p->line, "parameter '%.*s' declared twice", SF(p->name));
-            p->type = resolve_type(p->tyname, p->line);
+            p->type = resolve_type(p->ty);
         }
-        d->type = d->tyname.n ? resolve_type(d->tyname, d->line) : ty_unit;
+        d->type = d->ty ? resolve_type(d->ty) : ty_unit;
         if (str_is(d->name, "main")) main_fn = d;
     }
     if (!main_fn) die(1, "no 'main' function");

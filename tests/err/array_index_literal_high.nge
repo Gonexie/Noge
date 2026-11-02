@@ -1,0 +1,2 @@
+// error: index 3 is out of bounds for an array of length 3
+fn main() -> i32 { let a = [1, 2, 3]; let x = a[3]; return 0; }

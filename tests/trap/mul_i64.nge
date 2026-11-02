@@ -1,0 +1,8 @@
+// trap: 5: integer overflow
+fn main() -> i32 {
+    print(1);
+    let a: i64 = 4611686018427387904;
+    let r = a * 2;   // !
+    print(2);
+    return 0;
+}

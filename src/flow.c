@@ -2,21 +2,27 @@
  *
  * Runs on the type-checked AST. Noge only has structured control flow
  * (if / while / return), so the analysis walks the tree directly instead of
- * building a CFG.
+ * building a CFG. It visits expressions in exactly the order lowering
+ * evaluates them (left to right; an assignment's right side first).
  *
  * Every local is flattened into scalar "leaves" (a struct becomes its scalar
- * fields, recursively). Each leaf is UNINIT, INIT or MOVED. A place such as
- * `r.size` covers a contiguous range of leaves, so partial moves and partial
- * initialization need no special cases.
+ * fields, recursively; an array is a single leaf, because its elements are
+ * reached by a run-time index). Each leaf is UNINIT, INIT or MOVED. A place
+ * such as `r.size` covers a contiguous range of leaves, so partial moves and
+ * partial initialization need no special cases.
  *
  * Rules enforced here:
  *   - a place must be fully initialized when it is read, moved or passed;
  *   - using a non-copy place by value moves it; copy places are copied;
- *   - nothing may be moved out of a `let` parameter;
+ *   - nothing may be moved out of a `let` parameter, or out of an array
+ *     element (elements are chosen at run time, so only the whole array moves);
+ *   - an array must be whole before one of its elements is written;
  *   - inout and set parameters must be fully initialized whenever the
  *     function returns (so a caller never sees a hole);
- *   - within one expression, accesses that overlap may only both be reads
- *     (see "exclusivity" below).
+ *   - exclusivity: the arguments of one call are evaluated left to right. A
+ *     `let`, `inout` or `set` argument that names a place borrows it until the
+ *     call returns. Any later access that overlaps a live borrow, including
+ *     one inside a later argument, is an error unless both are plain reads.
  */
 #include "noge.h"
 
@@ -25,16 +31,16 @@ enum { LK_VAR, LK_LET, LK_LETPARAM, LK_SINK, LK_INOUT, LK_SET };
 
 typedef struct { bool live; unsigned char *s; } State; /* live=false: unreachable */
 typedef struct { Str name; Type *type; int base, kind; } FLocal;
-typedef struct { int local, lo, hi; } Place;           /* leaf range [lo, hi) */
-typedef struct { int lo, hi; char kind; Node *node; } Access; /* 'r' read, 'w' inout/set, 'm' move */
+typedef struct { int local, lo, hi; bool idx; } Place; /* leaf range [lo, hi); idx: reached through an array index */
+typedef struct { int lo, hi; bool write; Node *node; } Borrow;
 
 static Node *cur_fn;
 static FLocal *locs;
 static int nleaves;
 static State cur;
 static bool reporting; /* false while a loop is iterated to a fixpoint */
-static Access *accs;
-static int nacc, cacc;
+static Borrow *live;   /* borrows of the calls being evaluated, innermost last */
+static int nlive, clive;
 
 /* ---------- states ---------- */
 
@@ -116,7 +122,7 @@ static void layout_block(Node *b) {
 /* ---------- places ---------- */
 
 static bool is_place(Node *n) {
-    while (n->kind == N_MEMBER) n = n->a;
+    while (n->kind == N_MEMBER || n->kind == N_INDEX) n = n->a;
     return n->kind == N_NAME;
 }
 
@@ -127,21 +133,38 @@ static Place place_of(Node *n) {
         p.local = n->local;
         p.lo = l->base;
         p.hi = l->base + l->type->nleaves;
+        p.idx = false;
         return p;
     }
     p = place_of(n->a);
+    if (n->kind == N_INDEX || p.idx) { /* inside an array: still that array's one leaf */
+        p.idx = true;
+        return p;
+    }
     p.lo += n->decl->leaf_off;
     p.hi = p.lo + n->type->nleaves;
     return p;
 }
 
-/* "a.b.c" for a place expression; buf must start empty */
+/* the array that owns the storage of a place reached through an index */
+static Node *owning_array(Node *n) {
+    if (n->kind == N_NAME) return NULL;
+    Node *r = owning_array(n->a);
+    if (r) return r;
+    return n->kind == N_INDEX ? n->a : NULL;
+}
+
+/* "a.b.c" / "a[_].c" for a place expression; buf must start empty */
 static void pname(Node *n, char *buf, size_t cap) {
     size_t len;
     if (n->kind == N_MEMBER) {
         pname(n->a, buf, cap);
         len = strlen(buf);
         snprintf(buf + len, cap - len, ".%.*s", SF(n->name));
+    } else if (n->kind == N_INDEX) {
+        pname(n->a, buf, cap);
+        len = strlen(buf);
+        snprintf(buf + len, cap - len, "[_]");
     } else {
         len = strlen(buf);
         snprintf(buf + len, cap - len, "%.*s", SF(n->name));
@@ -171,20 +194,89 @@ static void bad_use(Node *n, Place p) {
     for (int i = p.lo; i < p.hi; i++)
         if (cur.s[i] != cur.s[first]) uniform = false;
     char nm[160] = "";
-    pname(n, nm, sizeof nm);
-    if (!uniform) leaf_path(n->type, first - p.lo, nm, sizeof nm); /* name the missing part */
+    if (p.idx) { /* name the whole array, which is what is missing */
+        pname(owning_array(n), nm, sizeof nm);
+    } else {
+        pname(n, nm, sizeof nm);
+        if (!uniform) leaf_path(n->type, first - p.lo, nm, sizeof nm); /* name the missing part */
+    }
     if (cur.s[first] == LS_MOVED) die(n->line, "use of moved value '%s'", nm);
     die(n->line, "use of uninitialized value '%s'", nm);
+}
+
+static void check_init(Node *n, Place p) {
+    if (!reporting || !cur.live) return;
+    for (int i = p.lo; i < p.hi; i++)
+        if (cur.s[i] != LS_INIT) bad_use(n, p);
+}
+
+/* ---------- exclusivity ---------- */
+
+static const char *kind_word(char k) { return k == 'r' ? "read" : k == 'm' ? "moved" : "inout/set"; }
+
+/* An access (a read, a write or a move) must not overlap a live borrow, unless both only read. */
+static void access(Node *n, Place p, char kind) {
+    if (!reporting) return;
+    for (int i = 0; i < nlive; i++) {
+        Borrow *b = &live[i];
+        if (p.lo >= b->hi || b->lo >= p.hi) continue;
+        if (kind == 'r' && !b->write) continue;
+        char a[160] = "", c[160] = "";
+        pname(n, a, sizeof a);
+        pname(b->node, c, sizeof c);
+        die(n->line,
+            "conflicting accesses: '%s' (%s) overlaps '%s' (%s), which an earlier argument of the same call "
+            "borrows until the call returns",
+            a, kind_word(kind), c, b->write ? "inout/set" : "read");
+    }
+}
+
+static void start_borrow(Node *n, Place p, bool write) {
+    access(n, p, write ? 'w' : 'r');
+    if (nlive == clive) {
+        clive = clive ? clive * 2 : 32;
+        live = realloc(live, (size_t)clive * sizeof *live);
+        if (!live) {
+            fprintf(stderr, "noge: out of memory\n");
+            exit(1);
+        }
+    }
+    live[nlive].lo = p.lo;
+    live[nlive].hi = p.hi;
+    live[nlive].write = write;
+    live[nlive].node = n;
+    nlive++;
+}
+
+/* ---------- expressions ---------- */
+
+static void expr(Node *n, bool consume);
+
+/* Evaluate the index expressions inside a place, outermost first. */
+static void path_exprs(Node *n) {
+    if (n->kind == N_MEMBER) {
+        path_exprs(n->a);
+    } else if (n->kind == N_INDEX) {
+        path_exprs(n->a);
+        expr(n->b, true);
+    }
 }
 
 /* Read, copy or move the place `n`. consume=true means "take the value":
  * a copy type is copied, anything else is moved out and left MOVED. */
 static void use_place(Node *n, bool consume) {
+    path_exprs(n);
     Place p = place_of(n);
-    if (reporting && cur.live)
-        for (int i = p.lo; i < p.hi; i++)
-            if (cur.s[i] != LS_INIT) bad_use(n, p);
-    if (consume && !n->type->is_copy) {
+    check_init(n, p);
+    bool moves = consume && !n->type->is_copy;
+    if (moves) {
+        if (reporting && p.idx) {
+            char nm[160] = "";
+            pname(owning_array(n), nm, sizeof nm);
+            die(n->line,
+                "cannot move out of an element of array '%s': its elements are not copy, and only the whole array can be moved",
+                nm);
+        }
         if (reporting && locs[p.local].kind == LK_LETPARAM) {
             char nm[160] = "";
             pname(n, nm, sizeof nm);
@@ -193,8 +285,17 @@ static void use_place(Node *n, bool consume) {
                 "make the type 'copy', or take the parameter as 'sink' or 'inout'",
                 nm, SF(locs[p.local].name));
         }
-        set_range(p.lo, p.hi, LS_MOVED);
     }
+    access(n, p, moves ? 'm' : 'r');
+    if (moves) set_range(p.lo, p.hi, LS_MOVED);
+}
+
+/* Borrow a place for the rest of the enclosing call. */
+static void place_borrow(Node *n, bool write, bool need_init) {
+    path_exprs(n);
+    Place p = place_of(n);
+    if (need_init || p.idx) check_init(n, p); /* an element can only be reached in a whole array */
+    start_borrow(n, p, write);
 }
 
 static void check_exit(int line) {
@@ -214,173 +315,40 @@ static void check_exit(int line) {
     }
 }
 
-/* ---------- exclusivity ----------
- * C does not fix the order in which operands, call arguments or initializer
- * fields are evaluated, and arguments are live together for the whole call.
- * So within one such group, two accesses to overlapping storage are only
- * allowed when both are plain reads. Moves, inout and set accesses must not
- * overlap anything else in the group, however deeply it is nested.
- */
-
-static void push(Place p, char kind, Node *n) {
-    if (nacc == cacc) {
-        cacc = cacc ? cacc * 2 : 64;
-        accs = realloc(accs, (size_t)cacc * sizeof *accs);
-        if (!accs) {
-            fprintf(stderr, "noge: out of memory\n");
-            exit(1);
-        }
-    }
-    accs[nacc].lo = p.lo;
-    accs[nacc].hi = p.hi;
-    accs[nacc].kind = kind;
-    accs[nacc].node = n;
-    nacc++;
-}
-
-static void collect(Node *n, bool consume);
-
-static void collect_arg(Node *a, int mode) {
-    switch (mode) {
-    case M_LET:
-        collect(a, false);
-        break;
-    case M_SINK:
-        collect(a, true);
-        break;
-    default:
-        push(place_of(a->a), 'w', a->a);
-        break;
-    }
-}
-
-static void collect(Node *n, bool consume) {
-    switch (n->kind) {
-    case N_NAME:
-        push(place_of(n), consume && !n->type->is_copy ? 'm' : 'r', n);
-        break;
-    case N_MEMBER:
-        if (is_place(n)) push(place_of(n), consume && !n->type->is_copy ? 'm' : 'r', n);
-        else collect(n->a, true);
-        break;
-    case N_UN:
-    case N_CAST:
-        collect(n->a, true);
-        break;
-    case N_BIN:
-        collect(n->a, true);
-        collect(n->b, true);
-        break;
-    case N_CALL: {
-        Node *p = n->decl->a;
-        for (Node *a = n->a; a; a = a->next, p = p->next) collect_arg(a, p->op);
-        break;
-    }
-    case N_LIT:
-        for (Node *i = n->a; i; i = i->next) collect(i->a, true);
-        break;
-    default:
-        break;
-    }
-}
-
-static const char *kind_word(char k) { return k == 'r' ? "read" : k == 'm' ? "moved" : "inout/set"; }
-
-/* start[i]..start[i+1] are the accesses of part i; compare every pair of parts */
-static void conflicts(const int *start, int count) {
-    for (int i = 0; i < count; i++)
-        for (int j = i + 1; j < count; j++)
-            for (int x = start[i]; x < start[i + 1]; x++)
-                for (int y = start[j]; y < start[j + 1]; y++) {
-                    Access *p = &accs[x], *q = &accs[y];
-                    if (p->kind == 'r' && q->kind == 'r') continue;
-                    if (p->lo >= q->hi || q->lo >= p->hi) continue;
-                    char a[160] = "", b[160] = "";
-                    pname(p->node, a, sizeof a);
-                    pname(q->node, b, sizeof b);
-                    die(q->node->line,
-                        "conflicting accesses in one expression: '%s' (%s) overlaps '%s' (%s); "
-                        "split it into separate statements",
-                        a, kind_word(p->kind), b, kind_word(q->kind));
-                }
-}
-
-static void group_call(Node *n) {
-    int cnt = 0;
-    for (Node *a = n->a; a; a = a->next) cnt++;
-    if (cnt < 2) return;
-    int *start = arena_alloc(&g_arena, sizeof(int) * (size_t)(cnt + 1));
-    int base = nacc, i = 0;
-    Node *p = n->decl->a;
-    for (Node *a = n->a; a; a = a->next, p = p->next, i++) {
-        start[i] = nacc;
-        collect_arg(a, p->op);
-    }
-    start[cnt] = nacc;
-    conflicts(start, cnt);
-    nacc = base;
-}
-
-static void group_bin(Node *n) {
-    int start[3], base = nacc;
-    start[0] = nacc;
-    collect(n->a, true);
-    start[1] = nacc;
-    collect(n->b, true);
-    start[2] = nacc;
-    conflicts(start, 2);
-    nacc = base;
-}
-
-static void group_lit(Node *n) {
-    int cnt = 0;
-    for (Node *i = n->a; i; i = i->next) cnt++;
-    if (cnt < 2) return;
-    int *start = arena_alloc(&g_arena, sizeof(int) * (size_t)(cnt + 1));
-    int base = nacc, k = 0;
-    for (Node *i = n->a; i; i = i->next, k++) {
-        start[k] = nacc;
-        collect(i->a, true);
-    }
-    start[cnt] = nacc;
-    conflicts(start, cnt);
-    nacc = base;
-}
-
-/* ---------- expressions ---------- */
-
-static void expr(Node *n, bool consume);
-
 static void call(Node *n) {
     Node *fn = n->decl;
-    if (reporting) group_call(n);
+    int base = nlive;
     Node *p = fn->a;
     for (Node *a = n->a; a; a = a->next, p = p->next) {
         switch (p->op) {
         case M_LET:
-            expr(a, false); /* borrowed for the call: read, never moved */
+            if (is_place(a)) place_borrow(a, false, true); /* borrowed for the whole call */
+            else expr(a, false);
             break;
         case M_SINK:
-            expr(a, true);
+            expr(a, true); /* taken (copied or moved) right now */
             break;
         case M_INOUT:
-            use_place(a->a, false); /* must be fully initialized, stays so */
+            place_borrow(a->a, true, true);
             break;
         default: /* M_SET: the callee initializes it */
+            place_borrow(a->a, true, false);
             break;
         }
     }
+    nlive = base; /* the call is over: its borrows end */
     p = fn->a;
     for (Node *a = n->a; a; a = a->next, p = p->next)
         if (p->op == M_SET) {
             Place pl = place_of(a->a);
-            set_range(pl.lo, pl.hi, LS_INIT);
+            if (!pl.idx) set_range(pl.lo, pl.hi, LS_INIT);
         }
 }
 
 static void expr(Node *n, bool consume) {
     switch (n->kind) {
     case N_NAME:
+    case N_INDEX:
         use_place(n, consume);
         break;
     case N_MEMBER:
@@ -392,14 +360,12 @@ static void expr(Node *n, bool consume) {
         expr(n->a, true);
         break;
     case N_BIN:
+        expr(n->a, true);
         if (n->op == T_ANDAND || n->op == T_OROR) { /* the right side runs only sometimes */
-            expr(n->a, true);
             State skipped = st_clone(&cur);
             expr(n->b, true);
             st_meet(&cur, &skipped);
         } else {
-            if (reporting) group_bin(n);
-            expr(n->a, true);
             expr(n->b, true);
         }
         break;
@@ -407,8 +373,13 @@ static void expr(Node *n, bool consume) {
         call(n);
         break;
     case N_LIT:
-        if (reporting) group_lit(n);
         for (Node *i = n->a; i; i = i->next) expr(i->a, true);
+        break;
+    case N_ARRAY:
+        for (Node *e = n->a; e; e = e->next) expr(e, true);
+        break;
+    case N_REPEAT:
+        expr(n->a, true);
         break;
     default:
         break;
@@ -433,9 +404,11 @@ static void stmt(Node *s) {
         break;
     }
     case N_ASSIGN: {
-        expr(s->b, true);
-        Place p = place_of(s->a); /* writing is not a use: it (re)initializes */
-        set_range(p.lo, p.hi, LS_INIT);
+        expr(s->b, true); /* right side first, then the place */
+        path_exprs(s->a);
+        Place p = place_of(s->a);
+        if (p.idx) check_init(s->a, p); /* writing an element needs a whole array */
+        else set_range(p.lo, p.hi, LS_INIT); /* writing a variable or field (re)initializes it */
         break;
     }
     case N_EXPR:
@@ -497,7 +470,7 @@ static void flow_fn(Node *fn) {
     cur_fn = fn;
     locs = arena_alloc(&g_arena, sizeof(FLocal) * (size_t)(fn->nlocals ? fn->nlocals : 1));
     nleaves = 0;
-    nacc = 0;
+    nlive = 0;
     for (Node *p = fn->a; p; p = p->next) {
         int kind = p->op == M_INOUT ? LK_INOUT : p->op == M_SET ? LK_SET : p->op == M_SINK ? LK_SINK : LK_LETPARAM;
         layout_local(p->local, p->name, p->type, kind);

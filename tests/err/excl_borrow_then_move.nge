@@ -1,0 +1,8 @@
+// error: conflicting accesses
+struct Buf { len: u32, cap: u32 }
+fn two(a: Buf, b: sink Buf) { }
+fn main() -> i32 {
+    let a = Buf { len: 1, cap: 2 };
+    two(a, a);
+    return 0;
+}

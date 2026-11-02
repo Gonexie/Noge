@@ -1,0 +1,38 @@
+struct S { xs: [i32; 3], tag: i32 }
+copy struct P { a: i32, b: i32 }
+
+fn make() -> [i32; 3] { return [4, 5, 6]; }
+fn total(a: [i32; 3]) -> i32 { return a[0] + a[1] + a[2]; }
+fn ident(a: [i32; 3]) -> [i32; 3] { return a; }
+fn bump(x: inout i32) { x = x + 1; }
+fn put(x: set i32, v: i32) { x = v; }
+fn show_p(p: P) -> i32 { return p.a * 10 + p.b; }
+fn sum_s(s: S) -> i32 { return s.xs[0] + s.xs[1] + s.xs[2] + s.tag; }
+fn sum_nested(m: [[i32; 2]; 2]) -> i32 { return m[0][0] + m[0][1] + m[1][0] + m[1][1]; }
+
+fn main() -> i32 {
+    print(total(make()));                      // an rvalue passed to a by-reference parameter: 15
+    let t = ident([1, 2, 3]);
+    print(t[2]);                               // 3
+    var a = [10, 20, 30];
+    bump(&a[1]);                               // an element as an inout target
+    put(&a[2], 99);                            // ... and as a set target (the array is already whole)
+    print(a[1] * 1000 + a[2]);                 // 21099
+    var m = [[1, 2], [3, 4]];
+    m[1] = [7, 8];                             // assign a whole row
+    print(sum_nested(m));                      // 1+2+7+8 = 18
+    var ps = [P { a: 1, b: 2 }, P { a: 3, b: 4 }];
+    print(show_p(ps[1]));                      // a struct element borrowed by reference: 34
+    let s = S { xs: [1, 2, 3], tag: 10 };
+    print(sum_s(s));                           // 16
+    var i = 0;
+    var acc = 0;
+    while i < 3 {
+        var tmp = [i; 4];                      // a fresh array on every iteration
+        tmp[3] = tmp[3] + 1;
+        acc = acc + tmp[0] + tmp[3];
+        i = i + 1;
+    }
+    print(acc);                                // (0+1) + (1+2) + (2+3) = 9
+    return 0;
+}

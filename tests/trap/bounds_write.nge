@@ -1,0 +1,9 @@
+// trap: 6: array index out of bounds
+fn main() -> i32 {
+    print(1);
+    var a = [0; 4];
+    let i = 4;
+    a[i] = 1;   // !
+    print(2);
+    return 0;
+}

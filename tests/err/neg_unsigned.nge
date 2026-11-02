@@ -1,0 +1,2 @@
+// error: unary '-' needs a signed integer
+fn main() -> i32 { let x: u32 = 1; let y = -x; return 0; }

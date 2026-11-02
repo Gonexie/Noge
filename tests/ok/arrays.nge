@@ -1,0 +1,94 @@
+struct Buf { len: u32, cap: u32 }                  // not copy
+copy struct Pt { x: i32, y: i32 }
+struct Grid { cells: [u8; 6], w: u32 }             // an array inside a struct
+
+fn sum(a: [i32; 4]) -> i32 {                       // let: passed by reference, not copied
+    var s = 0;
+    var i = 0;
+    while i < len(a) {
+        s = s + a[i];
+        i = i + 1;
+    }
+    return s;
+}
+
+fn double_all(a: inout [i32; 4]) {
+    var i = 0;
+    while i < len(a) {
+        a[i] = a[i] * 2;
+        i = i + 1;
+    }
+}
+
+fn rev(a: sink [i32; 4]) -> [i32; 4] {             // sink: the callee gets its own copy
+    var out = [0; 4];
+    var i = 0;
+    while i < 4 {
+        out[i] = a[3 - i];
+        i = i + 1;
+    }
+    return out;
+}
+
+fn init_squares(a: set [i32; 5]) {                 // set: the whole array must be assigned first
+    a = [0; 5];
+    var i = 0;
+    while i < 5 {
+        a[i] = i * i;
+        i = i + 1;
+    }
+}
+
+fn main() -> i32 {
+    var a = [1, 2, 3, 4];
+    print(sum(a));                                 // 10
+    double_all(&a);
+    print(sum(a));                                 // 20
+    let r = rev(a);                                // a is copy, so it is still usable
+    print(r[0]);                                   // 8
+    print(a[0]);                                   // 2
+
+    var b = a;                                     // arrays have value semantics
+    b[0] = 100;
+    print(a[0]);                                   // 2
+    print(b[0]);                                   // 100
+
+    var sq: [i32; 5];
+    init_squares(&sq);
+    print(sq[4]);                                  // 16
+
+    var g = Grid { cells: [0; 6], w: 3 };
+    g.cells[4] = 7;
+    print(g.cells[4] as i32 + g.cells[0] as i32);  // 7
+
+    let idx: u8 = 3;                               // any integer type can index
+    print(a[idx]);                                 // 8
+    let big: i64 = 1;
+    print(a[big]);                                 // 4
+
+    var pts = [Pt { x: 1, y: 2 }; 3];
+    pts[2].y = 40;
+    print(pts[2].y + pts[1].x);                    // 41
+
+    var m = [[0; 3]; 3];
+    var i = 0;
+    while i < 3 {
+        var j = 0;
+        while j < 3 {
+            m[i][j] = i * 3 + j;
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    print(m[2][1]);                                // 7
+    print(len(m) * 10 + len(m[0]));                // 33
+
+    var flags = [false; 4];
+    flags[2] = true;
+    print(flags[2] as i32 + flags[1] as i32);      // 1
+
+    let bufs = [Buf { len: 1, cap: 2 }, Buf { len: 3, cap: 4 }];
+    let moved = bufs;                              // non-copy elements: the whole array moves
+    print(moved[1].len as i32);                    // 3
+    return 0;
+}

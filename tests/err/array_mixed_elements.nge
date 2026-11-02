@@ -1,0 +1,2 @@
+// error: type mismatch: expected 'i32', found 'bool'
+fn main() -> i32 { let a = [1, true]; return 0; }

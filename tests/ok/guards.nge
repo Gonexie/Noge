@@ -1,0 +1,16 @@
+// The right side of && only runs when the left is true, so it can guard a bounds-checked access.
+fn find(a: [i32; 5], target: i32) -> i32 {
+    var i = 0;
+    while i < len(a) && a[i] != target {
+        i = i + 1;
+    }
+    if i < len(a) { return i as i32; }
+    return -1;
+}
+
+fn main() -> i32 {
+    let a = [4, 8, 15, 16, 23];
+    print(find(a, 15));   // 2
+    print(find(a, 99));   // -1: i reaches 5 and a[5] is never read
+    return 0;
+}

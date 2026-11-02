@@ -1,0 +1,8 @@
+// error: conflicting accesses
+struct Q { x: i32, y: i32 }
+fn add_to(q: inout Q, v: sink i32) { q.x = q.x + v; }
+fn main() -> i32 {
+    var q = Q { x: 1, y: 2 };
+    add_to(&q, q.x);
+    return 0;
+}

@@ -53,7 +53,9 @@ char *read_file(const char *path);
     X(T_LE, "'<='") X(T_GT, "'>'") X(T_GE, "'>='") X(T_PLUS, "'+'")            \
     X(T_MINUS, "'-'") X(T_STAR, "'*'") X(T_SLASH, "'/'")                       \
     X(T_PERCENT, "'%'") X(T_ANDAND, "'&&'") X(T_OROR, "'||'")                  \
-    X(T_BANG, "'!'") X(T_AMP, "'&'")
+    X(T_BANG, "'!'") X(T_AMP, "'&'") X(T_PIPE, "'|'") X(T_CARET, "'^'")      \
+    X(T_TILDE, "'~'") X(T_SHL, "'<<'") X(T_SHR, "'>>'")                     \
+    X(T_LBRACKET, "'['") X(T_RBRACKET, "']'")
 
 typedef enum {
 #define X(k, s) k,
@@ -61,6 +63,10 @@ typedef enum {
 #undef X
     T__COUNT
 } TokKind;
+
+/* operators that have no token of their own (the wrapping_* intrinsics) */
+enum { OP_WADD = T__COUNT, OP_WSUB, OP_WMUL };
+const char *op_name(int op);
 
 typedef struct {
     TokKind kind;
@@ -74,7 +80,7 @@ Token *lex(const char *src); /* array terminated by several T_EOF tokens */
 
 /* ---- types ---- */
 typedef struct Node Node;
-typedef enum { TY_UNIT, TY_BOOL, TY_INT, TY_STRUCT } TyKind;
+typedef enum { TY_UNIT, TY_BOOL, TY_INT, TY_STRUCT, TY_ARRAY } TyKind;
 typedef struct Type {
     TyKind kind;
     const char *name;
@@ -83,8 +89,15 @@ typedef struct Type {
     Node *decl;        /* struct declaration */
     const char *cname; /* name in the emitted C */
     bool is_copy;      /* may be duplicated implicitly; otherwise move-only */
-    int nleaves;       /* scalar fields after flattening nested structs */
+    int nleaves;       /* scalar fields after flattening nested structs; an array is one leaf */
+    struct Type *elem; /* array element type */
+    uint64_t len;      /* array length */
+    struct Type *next_array; /* all array types, in creation order */
+    unsigned char mark;      /* emitter: type definition already printed */
 } Type;
+
+extern Type *g_array_types; /* head of the list of array types */
+static inline bool is_aggregate(const Type *t) { return t->kind == TY_STRUCT || t->kind == TY_ARRAY; }
 
 extern Type *ty_unit, *ty_bool, *ty_i32;
 
@@ -92,11 +105,11 @@ extern Type *ty_unit, *ty_bool, *ty_i32;
 typedef enum {
     /* expressions */
     N_INT, N_BOOL, N_NAME, N_BIN, N_UN, N_ADDR, N_CALL, N_MEMBER, N_LIT,
-    N_INITF, N_CAST,
+    N_INITF, N_CAST, N_INDEX, N_ARRAY, N_REPEAT,
     /* statements */
     N_LET, N_ASSIGN, N_EXPR, N_IF, N_WHILE, N_RETURN, N_BLOCK,
     /* declarations */
-    N_FN, N_PARAM, N_STRUCT, N_FDECL
+    N_FN, N_PARAM, N_STRUCT, N_FDECL, N_TYPE
 } NodeKind;
 
 typedef enum { M_LET, M_INOUT, M_SINK, M_SET } ParamMode;
@@ -106,6 +119,7 @@ struct Node {
     int line;
     Str name;   /* identifier / field / callee */
     Str tyname; /* written type annotation, if any */
+    Node *ty;   /* written type annotation as a tree (N_TYPE), if any */
     Node *a, *b, *c;
     Node *next; /* sibling in a list */
     int op;     /* operator token, param mode, var-vs-let, literal sign */
@@ -123,6 +137,5 @@ struct Node {
 Node *parse_program(Token *toks); /* list of N_FN / N_STRUCT */
 void check_program(Node *prog);
 void flow_program(Node *prog); /* init / move / exclusivity checks */
-void emit_c(FILE *out, Node *prog);
 
 #endif

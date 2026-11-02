@@ -1,0 +1,2 @@
+// error: type mismatch: expected '[i32; 3]', found '[i32; 2]'
+fn main() -> i32 { let a: [i32; 3] = [1, 2]; return 0; }

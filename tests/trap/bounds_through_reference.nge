@@ -1,0 +1,11 @@
+// trap: 3: array index out of bounds
+fn at(a: [i32; 4], i: i32) -> i32 {
+    return a[i];   // !
+}
+fn main() -> i32 {
+    print(1);
+    let a = [1, 2, 3, 4];
+    let r = at(a, 4);
+    print(2);
+    return 0;
+}

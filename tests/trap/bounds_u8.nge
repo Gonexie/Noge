@@ -1,0 +1,9 @@
+// trap: 6: array index out of bounds
+fn main() -> i32 {
+    print(1);
+    let a = [1, 2, 3];
+    let i: u8 = 200;
+    let r = a[i];   // !
+    print(2);
+    return 0;
+}

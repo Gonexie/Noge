@@ -1,0 +1,10 @@
+// trap: 7: array index out of bounds
+struct Box { items: [i32; 2], n: i32 }
+fn main() -> i32 {
+    print(1);
+    var b = Box { items: [0; 2], n: 0 };
+    let i = 2;
+    b.items[i] = 5;   // !
+    print(2);
+    return 0;
+}

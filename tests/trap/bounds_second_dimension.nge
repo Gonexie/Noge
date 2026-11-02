@@ -1,0 +1,10 @@
+// trap: 7: array index out of bounds
+fn main() -> i32 {
+    print(1);
+    let m = [[0; 3]; 3];
+    let i = 1;
+    let j = 3;
+    let r = m[i][j];   // !
+    print(2);
+    return 0;
+}

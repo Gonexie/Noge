@@ -1,0 +1,2 @@
+// error: an array index must be an integer
+fn main() -> i32 { let a = [1, 2, 3]; let x = a[true]; return 0; }

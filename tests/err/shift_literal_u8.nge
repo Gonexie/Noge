@@ -1,0 +1,2 @@
+// error: shift amount 8 is out of range for 'u8' (0 to 7)
+fn main() -> i32 { let x: u8 = 5; let y = x << 8; return 0; }

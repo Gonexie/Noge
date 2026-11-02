@@ -1,0 +1,2 @@
+// error: needs integer operands
+fn main() -> i32 { let x = wrapping_add(true, false); return 0; }

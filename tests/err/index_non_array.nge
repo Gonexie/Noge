@@ -1,0 +1,2 @@
+// error: cannot index a value of type 'i32'
+fn main() -> i32 { let a = 5; let x = a[0]; return 0; }

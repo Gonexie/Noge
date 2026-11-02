@@ -1,0 +1,2 @@
+// error: 'len' takes an array variable, field or element
+fn main() -> i32 { let n = len([1, 2, 3]); return 0; }
