@@ -1,0 +1,36 @@
+import "std/vec.nge" as vec;
+import "std/ring.nge" as ring;
+import "std/arena.nge" as arena;
+import "std/option.nge" as option;
+import "std/math.nge" as math;
+
+copy struct Node { value: i32, next: i32 }
+
+fn main() -> i32 {
+    var v: vec::Vec<u8, 4> = vec::new(0);
+    vec::push(&v, 10);
+    vec::push(&v, 20);
+    print(vec::size(v) as i32);
+    print(option::unwrap_or(vec::pop(&v), 0) as i32);
+    var r: ring::Ring<i32, 3> = ring::new(0);
+    ring::push(&r, 5);
+    ring::push(&r, 6);
+    match ring::pop(&r) {
+        Option::Some(x) => { print(x); }
+        Option::None => { print(-1); }
+    }
+    var a: arena::Arena<Node, 8> = arena::new(Node { value: 0, next: -1 });
+    let id = arena::alloc(&a, Node { value: 42, next: 1 });
+    match id {
+        Option::Some(i) => { print(arena::get(a, i).value); }
+        Option::None => { print(-1); }
+    }
+    print(math::max(3, 9));
+    print(math::clamp(50, 0, 10));
+    print(math::abs(-7));
+    var x = 1;
+    var y = 2;
+    math::swap(&x, &y);
+    print(x * 10 + y);
+    return 0;
+}

@@ -1,0 +1,3 @@
+// error: lib.nge:2: error: operator '+' needs integer operands, found 'bool'
+import "lib.nge" as lib;
+fn main() -> i32 { let b = lib::add(true, false); return 0; }

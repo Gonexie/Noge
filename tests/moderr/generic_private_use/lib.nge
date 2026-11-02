@@ -1,0 +1,2 @@
+copy struct Hidden { x: i32 }
+pub fn f<T>(x: T) -> T { return x; }

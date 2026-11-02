@@ -1,0 +1,3 @@
+pub struct Item { a: i32, b: i32 }
+pub fn make() -> Item { return Item { a: 2, b: 3 }; }
+pub fn value(i: Item) -> i32 { return i.a + i.b; }

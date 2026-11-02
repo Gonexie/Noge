@@ -1,0 +1,37 @@
+// A vector with room for N elements and no allocation:   import "std/vec.nge" as vec;
+//   var v: vec::Vec<u8, 16> = vec::new(0);   vec::push(&v, 7);   vec::pop(&v)   (an Option)
+// The elements are copy types; `fill` is what the unused slots hold.
+
+pub copy struct Vec<T, const N: usize> { items: [T; N], len: usize }
+
+pub fn new<T, const N: usize>(fill: T) -> Vec<T, N> {
+    return Vec { items: [fill; N], len: 0 };
+}
+
+pub fn size<T, const N: usize>(v: Vec<T, N>) -> usize { return v.len; }
+pub fn capacity<T, const N: usize>(v: Vec<T, N>) -> usize { return N; }
+pub fn is_full<T, const N: usize>(v: Vec<T, N>) -> bool { return v.len == N; }
+pub fn is_empty<T, const N: usize>(v: Vec<T, N>) -> bool { return v.len == 0; }
+
+// false when there is no room
+pub fn push<T, const N: usize>(v: inout Vec<T, N>, x: T) -> bool {
+    if v.len == N { return false; }
+    v.items[v.len] = x;
+    v.len = v.len + 1;
+    return true;
+}
+
+pub fn pop<T, const N: usize>(v: inout Vec<T, N>) -> Option<T> {
+    if v.len == 0 { return Option::None; }
+    v.len = v.len - 1;
+    return Option::Some(v.items[v.len]);
+}
+
+pub fn get<T, const N: usize>(v: Vec<T, N>, i: usize) -> Option<T> {
+    if i >= v.len { return Option::None; }
+    return Option::Some(v.items[i]);
+}
+
+pub fn clear<T, const N: usize>(v: inout Vec<T, N>) {
+    v.len = 0;
+}

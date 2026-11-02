@@ -1513,7 +1513,7 @@ static Type *check_expr_inner(Node *n, Type *expect) {
             return check_expr_inner(n, expect);
         }
         Node *ed = find_enum(n->qual, n->tyname, n->line);
-        if (!ed) die(n->line, "unknown enum '%.*s'", SF(n->tyname));
+        if (!ed) die(n->line, n->qual.n ? "unknown enum '%.*s'" : "unknown enum or module '%.*s'", SF(n->tyname));
         Node *v = find_variant(ed, n->name);
         if (!v) die(n->line, "enum '%.*s' has no variant '%.*s'", SF(ed->name), SF(n->name));
         int want = list_len(v->a), got = list_len(n->a);

@@ -1,0 +1,28 @@
+// A ring buffer with room for N elements and no allocation:   import "std/ring.nge" as ring;
+//   var r: ring::Ring<u8, 8> = ring::new(0);   ring::push(&r, 1);   ring::pop(&r)   (an Option)
+
+pub copy struct Ring<T, const N: usize> { items: [T; N], head: usize, count: usize }
+
+pub fn new<T, const N: usize>(fill: T) -> Ring<T, N> {
+    return Ring { items: [fill; N], head: 0, count: 0 };
+}
+
+pub fn size<T, const N: usize>(r: Ring<T, N>) -> usize { return r.count; }
+pub fn is_full<T, const N: usize>(r: Ring<T, N>) -> bool { return r.count == N; }
+pub fn is_empty<T, const N: usize>(r: Ring<T, N>) -> bool { return r.count == 0; }
+
+// false when it is full
+pub fn push<T, const N: usize>(r: inout Ring<T, N>, x: T) -> bool {
+    if r.count == N { return false; }
+    r.items[(r.head + r.count) % N] = x;
+    r.count = r.count + 1;
+    return true;
+}
+
+pub fn pop<T, const N: usize>(r: inout Ring<T, N>) -> Option<T> {
+    if r.count == 0 { return Option::None; }
+    let x = r.items[r.head];
+    r.head = (r.head + 1) % N;
+    r.count = r.count - 1;
+    return Option::Some(x);
+}

@@ -1,0 +1,2 @@
+import "d.nge" as d;
+pub fn c() -> i32 { return d::base() + 2; }

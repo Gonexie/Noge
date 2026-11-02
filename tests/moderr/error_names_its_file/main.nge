@@ -1,0 +1,3 @@
+// error: lib.nge:2: error: type mismatch: expected 'i32', found 'bool'
+import "lib.nge" as lib;
+fn main() -> i32 { return lib::f(); }

@@ -1,0 +1,4 @@
+// error: 'same' comes from two imported modules
+import "a.nge";
+import "b.nge";
+fn main() -> i32 { return same(); }

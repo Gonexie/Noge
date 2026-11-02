@@ -1,0 +1,29 @@
+// import "std/result.nge" as result;     result::unwrap_or(r, 0)
+
+pub fn is_ok<T, E>(r: Result<T, E>) -> bool {
+    return match r {
+        Result::Ok(_) => true,
+        Result::Err(_) => false,
+    };
+}
+
+pub fn is_err<T, E>(r: Result<T, E>) -> bool {
+    return match r {
+        Result::Ok(_) => false,
+        Result::Err(_) => true,
+    };
+}
+
+pub fn unwrap_or<T, E>(r: Result<T, E>, fallback: T) -> T {
+    return match r {
+        Result::Ok(v) => v,
+        Result::Err(_) => fallback,
+    };
+}
+
+pub fn ok<T, E>(r: Result<T, E>) -> Option<T> {
+    return match r {
+        Result::Ok(v) => Option::Some(v),
+        Result::Err(_) => Option::None,
+    };
+}

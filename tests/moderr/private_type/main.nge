@@ -1,0 +1,4 @@
+// error: 'Secret' is private to module 'lib'
+import "lib.nge" as lib;
+fn f(s: lib::Secret) -> i32 { return 0; }
+fn main() -> i32 { return 0; }

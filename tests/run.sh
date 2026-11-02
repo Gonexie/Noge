@@ -9,11 +9,16 @@
 #               optional line 2 "// flags: <nogec options>"
 #   ffi/*.nge   like ok/, linked with ffi/<name>.c (C code the program calls, and that calls it back)
 #   free/*.nge  built with --freestanding as a -ffreestanding object that must not need stdio or exit
+#   mod/*/      programs of several files: main.nge (and what it imports) must print main.out; a main.trap holds
+#               text that must be on stderr when the run ends in a failed check (status 101)
+#   moderr/*/   main.nge must be rejected, with the text on its first line "// error: <text>" in the message
 #
 # ok/, trap/ and ffi/ run twice: with __builtin_*_overflow, and with --no-builtins (portable C99 checks).
 # If clang is installed, ok/ and trap/ are also compiled with it as a second opinion.
 # The one-step runner (noge) is checked too: output, exit status and clean-up.
 NOGEC=${1:-build/nogec}
+NOGE_STD=$PWD/std # the standard library, wherever nogec was built
+export NOGE_STD
 CC=${CC:-cc}
 tmp=$(mktemp -d)
 pass=0
@@ -58,6 +63,29 @@ for mode in "" "--no-builtins"; do
             failed "$f [$mode]: wrong output before the trap" "$tmp/diff"
         else
             pass=$((pass + 1))
+        fi
+    done
+
+    for d in tests/mod/*/; do
+        [ -e "${d}main.nge" ] || continue
+        b=mod_$(basename "$d")
+        build "$mode" "${d}main.nge" "$b" || continue
+        "$tmp/$b" >"$tmp/$b.out" 2>"$tmp/$b.stderr"
+        code=$?
+        if [ -f "${d}main.trap" ]; then
+            if [ "$code" -ne 101 ]; then
+                failed "$d [$mode]: expected exit status 101, got $code" "$tmp/$b.stderr"
+            elif ! grep -qF -- "$(cat "${d}main.trap")" "$tmp/$b.stderr"; then
+                failed "$d [$mode]: wanted '$(cat "${d}main.trap")' on stderr" "$tmp/$b.stderr"
+            elif ! diff -u "${d}main.out" "$tmp/$b.out" >"$tmp/diff"; then
+                failed "$d [$mode]: wrong output before the failed check" "$tmp/diff"
+            else
+                pass=$((pass + 1))
+            fi
+        elif diff -u "${d}main.out" "$tmp/$b.out" >"$tmp/diff"; then
+            pass=$((pass + 1))
+        else
+            failed "$d [$mode]: wrong output" "$tmp/diff"
         fi
     done
 
@@ -127,6 +155,18 @@ if command -v clang >/dev/null 2>&1; then
         fi
     done
 fi
+
+for d in tests/moderr/*/; do
+    [ -e "${d}main.nge" ] || continue
+    want=$(sed -n '1s|^// error: ||p' "${d}main.nge")
+    if "$NOGEC" -o /dev/null "${d}main.nge" 2>"$tmp/err"; then
+        failed "$d: compiled, but should have been rejected"
+    elif grep -qF -- "$want" "$tmp/err"; then
+        pass=$((pass + 1))
+    else
+        failed "$d: wrong error, wanted '$want'" "$tmp/err"
+    fi
+done
 
 for f in tests/err/*.nge; do
     [ -e "$f" ] || continue

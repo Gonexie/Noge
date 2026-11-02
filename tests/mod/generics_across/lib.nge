@@ -1,0 +1,11 @@
+// Generic code that uses what only its own module can see: instances made from main still resolve these names here.
+pub copy struct Wrapper<T> { v: T, tag: i32 }
+copy struct Hidden { x: i32 }
+fn secret() -> i32 { return 100; }
+
+pub fn wrap<T>(x: T) -> Wrapper<T> { return Wrapper { v: x, tag: secret() }; }
+pub fn tag<T>(w: Wrapper<T>) -> i32 {
+    let h = Hidden { x: w.tag };
+    return h.x;
+}
+pub fn first<T, const N: usize>(a: [T; N]) -> T { return a[0]; }

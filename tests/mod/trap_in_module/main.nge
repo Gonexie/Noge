@@ -1,0 +1,8 @@
+// A failed check in another file says that file.
+import "lib.nge" as lib;
+
+fn main() -> i32 {
+    print(1);
+    print(lib::boom(5));
+    return 0;
+}

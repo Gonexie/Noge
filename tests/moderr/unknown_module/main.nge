@@ -1,0 +1,2 @@
+// error: unknown enum or module 'nope'
+fn main() -> i32 { return nope::f(); }

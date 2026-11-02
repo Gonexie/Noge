@@ -1,0 +1,11 @@
+// two modules with an Item and a make() each
+import "one.nge" as one;
+import "two.nge" as two;
+
+fn main() -> i32 {
+    let x = one::make();
+    let y = two::make();
+    print(one::value(x));              // 1
+    print(two::value(y));              // 5
+    return 0;
+}

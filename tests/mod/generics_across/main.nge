@@ -1,0 +1,13 @@
+import "lib.nge" as lib;
+
+copy struct Mine { z: i32 }
+fn secret() -> i32 { return 1; }       // not the one in lib
+
+fn main() -> i32 {
+    let w = lib::wrap(Mine { z: 5 });
+    print(w.v.z);                      // 5
+    print(lib::tag(w));                // 100: lib's secret()
+    print(secret());                   // 1: main's own
+    print(lib::first([7, 8]));         // 7
+    return 0;
+}

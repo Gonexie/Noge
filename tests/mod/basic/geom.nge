@@ -1,0 +1,5 @@
+pub struct Point { x: i32, y: i32 }
+pub enum Shape { Circle(i32), Empty }
+pub const ORIGIN_X: i32 = 7;
+pub fn dist2(p: Point) -> i32 { return p.x * p.x + p.y * p.y + helper(); }
+fn helper() -> i32 { return 0; }

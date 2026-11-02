@@ -9,6 +9,7 @@ make test         # host tests, then the Cortex-M tests under QEMU if the ARM to
 make check-arith  # slower: the overflow/division/shift code and the constant folder, against __int128
 make check-match  # slower: random enums and match arms, against a brute-force model and a reference interpreter
 make check-generics  # slower: random generic programs, against the same programs with every instance written out
+make check-modules   # every positive test cut into two files, against its expected output
 make fuzz         # damaged programs must be rejected cleanly, never crash the compiler
 make -C examples/cortex-m test   # just the firmware (see examples/cortex-m/README.md)
 
@@ -25,8 +26,8 @@ build/nogec --target=cortex-m -o fw.c fw.nge      # for a microcontroller: no C 
 the temporary files. The program's exit status is passed through (a failed run-time check gives 101); a program
 that does not compile gives status 1. If `tcc` is installed it is used for the C, which is far faster than gcc
 (the generated C for a 68,000-line program: 0.18 s against 19.8 s); `--gcc` forces gcc, `-O` uses `gcc -O2`, and
-`--emit-c` prints the generated C instead of running anything. It handles one-file programs; a program that calls
-your own C files needs the three steps by hand (`nogec`, a C compiler with all the files, run).
+`--emit-c` prints the generated C instead of running anything. It handles programs of several `.nge` files; a program
+that calls your own C files needs the three steps by hand (`nogec`, a C compiler with all the files, run).
 
 ## The language so far
 
@@ -52,7 +53,7 @@ fn main() -> i32 {
 ```
 
 Items: `fn`, `struct`, `copy struct`, `enum`, `copy enum` (any of the first five can be generic), `const`,
-`extern "C" fn`, `export "C" fn`.
+`extern "C" fn`, `export "C" fn`, and `import` of another file. Any item can be marked `pub`.
 Types: `i8..i64`, `u8..u64`, `usize`, `isize`, `bool`, `struct` and `enum` (by value, nested), fixed arrays `[T; N]`,
 raw pointers `*mut T` and `*const T`. Statements: `let`, `var`, `if` / `else if` / `else`, `while`, `match`, `return`,
 assignment, `unsafe { }`. Expressions: arithmetic `+ - * / %`, bitwise `& | ^ ~ << >>`, comparison, `&& || !`, `as` casts (between
@@ -244,6 +245,73 @@ and `export` functions cannot be generic. A type cannot contain itself by value,
 Not in this version: bounds and `where` clauses, default arguments, arithmetic in arguments (`Ring<T, N + 1>`), and a
 standard library: write the `Option<T>` you need, as above, until there are modules.
 
+## Modules and the standard library
+
+A program can be several files. Each file is a module. The file you give `nogec` (or `./noge`) is the program's own;
+it must have `main`. Other files are brought in with `import`, by a path relative to the importing file:
+
+```
+import "geom.nge" as geom;       // its public names are used as geom::name
+import "util.nge";               // its public names are merged into this module's own
+
+fn main() -> i32 {
+    let p = geom::Point { x: 3, y: 4 };
+    print(geom::dist2(p));                       // a function, a struct and an enum are reached the same way:
+    let s: geom::Shape = geom::Shape::Circle(2); // module::Name, module::Enum::Variant
+    return twice(21);                            // from util.nge, no prefix
+}
+```
+
+```
+// geom.nge
+pub struct Point { x: i32, y: i32 }
+pub enum Shape { Circle(i32), Empty }
+pub fn dist2(p: Point) -> i32 { return p.x * p.x + p.y * p.y + helper(); }
+fn helper() -> i32 { return 0; }               // not pub: only this file can use it
+```
+
+- **`pub`** on a `fn`, `struct`, `enum`, `const` (or `extern` / `export` function) lets other files use it. Anything
+  else is private to its file, and using it from outside is an error that says so. The fields of a `pub` struct are
+  all visible. Two files may each have a private `helper`, or a `pub struct Item`: names are per file.
+- **`as name`** gives the module a name to write in front of its items. Without it the items are merged in, and the
+  importing file's own declarations win over them; a name that two imports both provide is an error at the place it
+  is used (write `module::name` with `as` to say which). A module name cannot also be a declaration's name.
+- A file imported by several others is loaded once. Files cannot import each other in a circle.
+- Generic code resolves the names in it where it was written: a generic function from `lib.nge` can call lib's private
+  helpers when it is used from `main.nge`. A run-time failure and a compile error name the file they are in.
+- Everything is compiled together into one C file. (Compiling each module to its own C file, so that a change
+  rebuilds only what it touches, comes next.)
+
+**The standard library** is written in Noge, in the `std/` folder next to the compiler (`--std-dir=DIR` or the
+`NOGE_STD` variable say where it is if the compiler is moved). `import "std/ring.nge" as ring;` loads it.
+
+| file                | what it has                                                                              |
+|---------------------|------------------------------------------------------------------------------------------|
+| `std/prelude.nge`   | `Option<T>` and `Result<T, E>`: imported into every module, without asking (`--no-prelude` stops it) |
+| `std/option.nge`    | `is_some`, `is_none`, `unwrap_or`, `or`                                                  |
+| `std/result.nge`    | `is_ok`, `is_err`, `unwrap_or`, `ok`                                                     |
+| `std/math.nge`      | `min`, `max`, `clamp`, `abs`, `swap`, for any type the operators work on                 |
+| `std/vec.nge`       | `Vec<T, N>`: room for N elements, no allocation: `new`, `push`, `pop`, `get`, `size`, `clear` |
+| `std/ring.nge`      | `Ring<T, N>`: a ring buffer: `new`, `push`, `pop`, `size`, `is_full`, `is_empty`        |
+| `std/arena.nge`     | `Arena<T, N>` and the handle `Id<T>`: `new`, `alloc`, `get`, `set`                       |
+
+```
+import "std/ring.nge" as ring;
+
+fn main() -> i32 {
+    var r: ring::Ring<u8, 4> = ring::new(0);
+    ring::push(&r, 7);
+    match ring::pop(&r) {              // Option comes from the prelude
+        Option::Some(x) => { print(x as i32); }
+        Option::None => { }
+    }
+    return 0;
+}
+```
+
+The containers hold `copy` types and are `copy` themselves (`new` takes the value the unused slots hold, since there
+are no uninitialized arrays). A program that declares its own `Option` or `Result` uses its own.
+
 ## Constants
 
 `const NAME: T = expr;` declares an integer or bool known at compile time. Constants can use each other in any
@@ -376,8 +444,7 @@ On a 68,000-line generated program `nogec` takes about 0.25 s; compiling the 9.6
 - There are no global variables. Shared state between an interrupt handler and `main` lives in memory owned by C
   and is reached through a volatile pointer (see `examples/cortex-m/systick.nge`). Deciding how interrupt-shared
   state should be typed is still open.
-- Arena and handle types (`Arena<T, N>`, `Id<T>`) can now be written in the language (see `tests/ok/generics_arena.nge`),
-  but there is no standard library to ship them in.
+- Arena and handle types (`Arena<T, N>`, `Id<T>`) are in the standard library (`std/arena.nge`).
 - The emitted C relies on what GCC and Clang do for things the C standard leaves implementation-defined:
   converting an out-of-range value to a signed type (`as`, and `<<`), `>>` of a negative value, and `__asm__`
   labels for the extern and export names. 16-bit targets (16-bit `int`) are not supported.
@@ -386,5 +453,6 @@ On a 68,000-line generated program `nogec` takes about 0.25 s; compiling the 9.6
 - `let x: T;` (assign later) is not supported, only `var x: T;`.
 - Recursion is not restricted yet.
 - The compiler stops at the first error, and the only backend is C.
-- Separate compilation, modules and a standard library (so no ready-made `Option<T>`; see Generics). Generics have
-  no bounds. Patterns have no guards, ranges, struct patterns, `if let` or `@` yet, and an enum cannot be passed to C.
+- Separate compilation: one C file per module, rebuilt only when it changes. Modules have no re-exports
+  (`pub import`), no `use` to bring one name in, and no nesting (`a::b::c`). The standard library is small. Generics
+  have no bounds. Patterns have no guards, ranges, struct patterns, `if let` or `@` yet, and an enum cannot be passed to C.

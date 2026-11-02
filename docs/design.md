@@ -102,7 +102,8 @@ Notes
 4. C FFI with `unsafe`; build a blinky for a real target (e.g. ARM Cortex-M via arm-none-eabi-gcc). **Done** on an emulated Cortex-M3 (see below); not yet run on a physical board.
 5. Enums and pattern matching. **Done** (see below).
 6. Generics (`Option<T>`, `Arena<T, N>`, `Id<T>` can now be written in the language). **Done** (see below).
-7. Separate compilation, modules and a standard library.
+7. Modules and a standard library. **Done** (see below).
+8. Separate compilation: one C file per module, rebuilt only when it changes.
 
 ## Decisions made in milestone 2
 
@@ -360,10 +361,81 @@ What this does **not** show: generic code that nothing instantiates is not check
 sanitizers were not installed here; and there are no bounds, so a generic function says what it needs only through
 the error at a use.
 
+## Decisions made in milestone 7
+
+Milestone 7 was split: modules and the standard library are here; compiling each module to its own C file is milestone 8.
+
+- **A file is a module, and a name means what it means in the file it is written in.** The loader (`src/modules.c`)
+  parses the program's file and, depth first, everything it imports, once each (files are identified by their
+  normalized path), and hands the checker one list of declarations, each marked with its module. The checker keeps
+  three name tables per module (types, functions, constants) and looks a name up in the module being checked: its
+  own declarations first, then the public ones of the modules imported without a name, with the standard prelude
+  last so that anything else beats it. Two non-prelude imports offering one name is an error where it is used.
+- **Qualified names are `module::name`**, resolved through the importing module's own list of `as` names, so a name
+  is not global: two files can both have a `helper` or a `pub struct Item`. `a::b` was already `Enum::Variant`; the
+  checker decides which it is (an `as` name that is not also a type means a module), and `module::Enum::Variant` is
+  unambiguous. No nesting (`a::b::c` for a module inside a module), no re-exports, and no `use` that brings a single
+  name in: `import "f"` without `as` does that for all of them.
+- **`pub` is per item and a keyword only at the start of one**, like `copy`, so existing programs that call a variable
+  `pub` or `import` still work. Fields are not hidden: a `pub struct` can be built and read from outside. Hiding fields
+  would need a way for the module to offer a constructor, which is a design of its own.
+- **Generic code is checked where it was written.** An instance made from `main.nge` of a template in `lib.nge` is
+  resolved in `lib.nge`'s module (its field types, its signature, its body, the names inside the type patterns used to
+  infer arguments), so the template can call lib's private helpers and name lib's private types. The module in effect
+  is switched around every such step and put back.
+- **The prelude is ordinary source** (`std/prelude.nge`: `Option<T>` and `Result<T, E>`), imported by every module
+  except itself, at the lowest priority, so a program that defines its own `Option` (many tests do) is unaffected. If
+  the standard library cannot be found the prelude is skipped; asking for `std/...` then is an error that says how to
+  tell the compiler where it is (`--std-dir`, `NOGE_STD`, or `std/` next to the folder `nogec` is in).
+- **C names carry the module.** A type or function of module 3 is `sm3_Name` / `fm3_name` (module 0, the program's
+  own file, keeps the plain `s_Name` / `f_name`, and instances keep `s<id>_Name` / `f<id>_name`), so equal names in
+  different modules cannot clash in the one C file. `extern` functions keep one global name, as C functions do.
+  A failed run-time check names the file its line is in: the emitted C redefines `NOGE_FILE` before each function from
+  another module, and the default trap handler takes the file as an argument (`NOGE_TRAP(kind, line)` itself is
+  unchanged, so a hook written for it still works).
+- **The standard library is small and written in the language.** `option`, `result`, `math`, `vec`, `ring` and `arena`:
+  the containers have room for N elements and no allocation, hold `copy` types (a fixed array needs a value to fill it)
+  and are `copy` themselves. `math::min` and friends work for any type whose operators work, checked per use. They
+  are the first big users of generics, const parameters, modules and the prelude at once.
+
+### How milestone 7 was checked
+
+- **Tests.** 8 programs of several files (`tests/mod/`: aliases and merged imports, a diamond of imports, equal names in
+  different files, a program that declares its own `Option`, generic code that uses names only its own file can see, a
+  constant and generic types used across files, a run-time failure in an imported file, and all the library modules
+  together), each run with and without `--no-builtins`, and 15 that must be rejected (`tests/moderr/`: a private
+  function, type or constant, an unknown module, two imports of one name, an import circle, a missing file, a clash
+  between an import's name and a declaration, an error that must name the file it is in, and more).
+- **Every positive test, split in two** (`tests/modules_check.py`, `make check-modules`): each of the 42 programs in
+  `tests/ok` is cut into `main.nge`, which keeps `fn main` and imports `lib.nge`, and `lib.nge`, which holds every other
+  item marked `pub`. Both must print what the single file printed before modules existed. That sends all the generic,
+  enum and match programs across the module boundary at once: instances of lib's templates made from main, patterns,
+  constants, struct literals.
+- **Mutation testing.** 16 deliberate bugs in the module code (a private name usable from outside; a module not
+  seeing its own names first; non-`pub` names visible through an import; ambiguity not noticed; a function, a type
+  instance, a function instance, a template's type patterns, a type inference step, or a constant resolved in the
+  wrong module; equal C names for equal names in two modules; a failed check naming the wrong file; every declaration
+  in module 0; a file loaded twice; an import circle not noticed). 14 were caught at once and 2 were missed (a generic
+  struct whose field names a type only its own file can see; a constant first used lazily, as an array length in
+  another file). Both got a test (`tests/mod/scoping`), and all 16 are caught.
+- **Sanitizers and fuzzing.** The suite and about 38,000 damaged programs (17,000 against the final code, with the
+  multi-file programs among the seeds, copied with their neighbours, and with the standard library in reach) were run
+  through a compiler built with AddressSanitizer and UBSanitizer: no memory error and no crash. The C of all 50 single-
+  and multi-file positive programs was built at `-O2` and `-Os` with gcc and clang and under gcc's sanitizers, in both
+  overflow modes (500 builds, no warning); all pass through tcc; and the firmware, which now takes its ring buffer
+  from `std/ring.nge`, passes under QEMU at `-O0` to `-O3`, `-Os` and with `--no-builtins`.
+
+What this does **not** show: everything is still compiled to one C file, so nothing yet shows that a change in one
+module rebuilds only that module; the standard library is small and untested beyond its own examples and the
+firmware; two modules that `export` the same C name are not noticed until the linker; a module is identified by its
+normalized path, so one file reached through a symbolic link under two names is loaded twice; fields cannot be made
+private; and nothing here ran on real hardware or with clang's sanitizers (not installed here).
+
 ## Open questions
 - Do we need Hylo-style `subscript` projections to access into containers without copying, or is `inout` on paths plus arenas enough?
 - Copy vs move default for small structs, and for plain enums: `copy enum Color { .. }` has to be written, and
   nearly every enum without values is wanted that way.
+- Modules inside modules (`a::b::c`), re-exports (`pub import`), a `use` that brings in one name, and private fields.
 - Bounds on generic parameters (`T: Ord`), which would let generic code be checked once instead of per instance,
   and would need a trait or interface mechanism.
 - Arithmetic in generic arguments (`Ring<T, N + 1>`).

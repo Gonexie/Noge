@@ -1,0 +1,30 @@
+// import "std/option.nge" as option;     option::unwrap_or(o, 0)
+
+pub fn is_some<T>(o: Option<T>) -> bool {
+    return match o {
+        Option::Some(_) => true,
+        Option::None => false,
+    };
+}
+
+pub fn is_none<T>(o: Option<T>) -> bool {
+    return match o {
+        Option::Some(_) => false,
+        Option::None => true,
+    };
+}
+
+pub fn unwrap_or<T>(o: Option<T>, fallback: T) -> T {
+    return match o {
+        Option::Some(v) => v,
+        Option::None => fallback,
+    };
+}
+
+// the first one that has a value
+pub fn or<T>(a: Option<T>, b: Option<T>) -> Option<T> {
+    return match a {
+        Option::Some(v) => Option::Some(v),
+        Option::None => b,
+    };
+}

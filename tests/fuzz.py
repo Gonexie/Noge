@@ -27,7 +27,7 @@ SEED = option("--seed", 1)
 NOGEC = args[0] if args else "build/nogec"
 
 TOKEN = re.compile(r'//[^\n]*|c?"(?:[^"\\\n]|\\.)*"|[A-Za-z_][A-Za-z0-9_]*|0[xXbB][0-9A-Fa-f_]+|[0-9][0-9_]*|=>|::|->|<<|>>|<=|>=|==|!=|&&|\|\||\S')
-KEEP = ("fn", "struct", "enum", "match", "let", "var", "while", "if", "else", "return", "copy", "sink", "inout", "set", "unsafe",
+KEEP = ("import", "pub", "as", "std", "\"lib.nge\"", "fn", "struct", "enum", "match", "let", "var", "while", "if", "else", "return", "copy", "sink", "inout", "set", "unsafe",
         "extern", "export", "const", "true", "false", "as", "_", "|", "=>", "::", "(", ")", "{", "}", "[", "]", ",", ";", ":", "=",
         "+", "-", "*", "/", "<", ">", "&", "0", "1", "255", "i32", "u8", "bool", "x", "Shape", "Circle")
 
@@ -64,6 +64,10 @@ def one(job):
     rng = random.Random(SEED * 7919 + n)
     src = damage(rng, open(path).read())
     with tempfile.TemporaryDirectory() as d:
+        here = os.path.dirname(path)
+        if os.path.basename(os.path.dirname(here)) in ("mod", "moderr"):  # a program of several files: bring the others
+            for other in glob.glob(os.path.join(here, "*.nge")):
+                open(os.path.join(d, os.path.basename(other)), "w").write(open(other).read())
         f = os.path.join(d, "f.nge")
         open(f, "w").write(src)
         for flags in ([], ["--no-builtins"]):
@@ -84,7 +88,7 @@ def one(job):
 
 
 def main():
-    files = sorted(glob.glob("tests/*/*.nge"))
+    files = sorted(glob.glob("tests/*/*.nge") + glob.glob("tests/mod/*/*.nge") + glob.glob("tests/moderr/*/*.nge"))
     jobs = [(f, i * len(files) + j) for i in range(ROUNDS) for j, f in enumerate(files)]
     bad = 0
     with ThreadPoolExecutor(max_workers=os.cpu_count() or 2) as pool:

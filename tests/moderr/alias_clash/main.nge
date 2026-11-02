@@ -1,0 +1,4 @@
+// error: is both the name of an import and of a declaration in this module
+import "lib.nge" as util;
+fn util() -> i32 { return 0; }
+fn main() -> i32 { return 0; }

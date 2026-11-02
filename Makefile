@@ -24,6 +24,10 @@ check-arith: build/nogec
 check-match: build/nogec
 	python3 tests/match_check.py build/nogec
 
+# Every positive test, cut into two files, against its expected output.
+check-modules: build/nogec
+	python3 tests/modules_check.py build/nogec
+
 # Random generic programs, against the same programs with every instance written out by hand.
 check-generics: build/nogec
 	python3 tests/generics_check.py build/nogec
@@ -36,4 +40,4 @@ fuzz: build/nogec
 clean:
 	rm -rf build
 
-.PHONY: test test-target check-arith check-match check-generics fuzz clean
+.PHONY: test test-target check-arith check-match check-generics check-modules fuzz clean

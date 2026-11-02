@@ -1,0 +1,10 @@
+// b and c both import d: it is loaded once.
+import "b.nge" as b;
+import "c.nge" as c;
+import "d.nge" as d;
+
+fn main() -> i32 {
+    print(b::b() + c::c());            // 11 + 12
+    print(d::base());                  // 10
+    return 0;
+}

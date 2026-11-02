@@ -1,0 +1,5 @@
+// Imported by every module without being asked: the two types nearly every program wants.
+// A module that declares its own Option or Result uses that one instead.
+
+pub copy enum Option<T> { Some(T), None }
+pub copy enum Result<T, E> { Ok(T), Err(E) }

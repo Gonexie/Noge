@@ -12,7 +12,7 @@
 # The exit status is the program's own (so a failed run-time check gives 101), or 1 if your
 # program did not compile, or 2 if noge itself could not do its job.
 #
-# This is for programs in a single file. A program that calls your own C files needs the
+# This is for programs made of .nge files (the ones they import are found by themselves). A program that calls your own C files needs the
 # three steps done by hand: nogec, then gcc with all the files, then run.
 
 usage() {

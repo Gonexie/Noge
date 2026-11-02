@@ -1,0 +1,2 @@
+fn helper() -> i32 { return 1; }
+pub fn shown() -> i32 { return 2; }

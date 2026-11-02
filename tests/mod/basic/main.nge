@@ -1,0 +1,15 @@
+import "geom.nge" as geom;
+import "util.nge";
+
+fn main() -> i32 {
+    let p = geom::Point { x: 3, y: 4 };
+    print(geom::dist2(p));
+    print(twice(21));
+    let s: geom::Shape = geom::Shape::Circle(2);
+    match s {
+        geom::Shape::Circle(r) => { print(r); }
+        geom::Shape::Empty => { print(0); }
+    }
+    print(geom::ORIGIN_X);
+    return 0;
+}

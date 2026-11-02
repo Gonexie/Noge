@@ -1,0 +1,2 @@
+import "b.nge" as b;
+pub fn f() -> i32 { return b::g(); }

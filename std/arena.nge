@@ -1,0 +1,27 @@
+// Things in an array that are named by index, with no allocation:   import "std/arena.nge" as arena;
+//   var a: arena::Arena<Node, 64> = arena::new(Node { .. });
+//   let id = arena::alloc(&a, node);        an Option<arena::Id<Node>>
+//   arena::get(a, id)   arena::set(&a, id, node)
+// An Id<Node> cannot be used for an Arena of anything else.
+
+pub copy struct Id<T> { index: u32 }
+pub copy struct Arena<T, const N: usize> { items: [T; N], len: usize }
+
+pub fn new<T, const N: usize>(fill: T) -> Arena<T, N> {
+    return Arena { items: [fill; N], len: 0 };
+}
+
+pub fn size<T, const N: usize>(a: Arena<T, N>) -> usize { return a.len; }
+
+// none when it is full
+pub fn alloc<T, const N: usize>(a: inout Arena<T, N>, v: T) -> Option<Id<T>> {
+    if a.len == N { return Option::None; }
+    let i = a.len;
+    a.items[i] = v;
+    a.len = a.len + 1;
+    return Option::Some(Id { index: i as u32 });
+}
+
+pub fn get<T, const N: usize>(a: Arena<T, N>, id: Id<T>) -> T { return a.items[id.index]; }
+
+pub fn set<T, const N: usize>(a: inout Arena<T, N>, id: Id<T>, v: T) { a.items[id.index] = v; }

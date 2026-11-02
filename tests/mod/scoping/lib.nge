@@ -1,0 +1,16 @@
+// Things only this file can see, used by things other files can use: a constant, generic types and functions.
+copy struct Hidden { x: i32 }
+const BASE: i32 = 20;
+pub const LIMIT: i32 = BASE * 2;
+pub copy struct Boxed<T> { v: T, h: Hidden }
+pub copy enum Pick<T> { A(T), B(Hidden) }
+
+pub fn boxed<T>(x: T) -> Boxed<T> { return Boxed { v: x, h: Hidden { x: 7 } }; }
+pub fn hidden_of<T>(b: Boxed<T>) -> i32 { return b.h.x; }
+pub fn pick_b<T>() -> Pick<T> { return Pick::B(Hidden { x: 9 }); }
+pub fn pick_value<T>(p: Pick<T>, d: T) -> T {
+    return match p {
+        Pick::A(v) => v,
+        Pick::B(_) => d,
+    };
+}

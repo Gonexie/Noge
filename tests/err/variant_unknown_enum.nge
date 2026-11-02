@@ -1,4 +1,4 @@
-// error: unknown enum 'Nope'
+// error: unknown enum or module 'Nope'
 fn f() -> i32 {
     let x = Nope::A;
     return 0;

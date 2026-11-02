@@ -1,0 +1,17 @@
+import "lib.nge" as lib;
+
+struct Frame { data: [u8; lib::LIMIT] }       // an array length that is another module's constant
+
+fn main() -> i32 {
+    print(lib::LIMIT);                       // 40: BASE is lib's own
+    let a = [0; lib::LIMIT];
+    print(len(a));                           // 40
+    let b = lib::boxed(3);                   // a struct whose field has a type main cannot name
+    print(b.v);                              // 3
+    print(lib::hidden_of(b));                // 7
+    let p: lib::Pick<i32> = lib::pick_b();   // the same for an enum
+    print(lib::pick_value(p, 5));            // 5
+    let f = Frame { data: [1; lib::LIMIT] };
+    print(len(f.data));                      // 40
+    return 0;
+}

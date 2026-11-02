@@ -1,0 +1,19 @@
+// The prelude gives every module Option and Result; a declaration of the same name in the module wins.
+enum Option { A, B }
+
+fn pick(o: Option) -> i32 {
+    return match o {
+        Option::A => 1,
+        Option::B => 2,
+    };
+}
+
+fn main() -> i32 {
+    print(pick(Option::B));            // 2: this module's Option
+    let r: Result<i32, bool> = Result::Ok(7);     // the prelude's Result
+    match r {
+        Result::Ok(v) => { print(v); }
+        Result::Err(_) => { print(0); }
+    }
+    return 0;
+}

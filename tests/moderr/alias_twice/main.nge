@@ -1,0 +1,4 @@
+// error: 'x' names two different imports
+import "a.nge" as x;
+import "b.nge" as x;
+fn main() -> i32 { return 0; }

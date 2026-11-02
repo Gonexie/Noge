@@ -1,0 +1,30 @@
+// import "std/math.nge" as math;     math::min(a, b)
+// These work for any type the comparison or the arithmetic works for: each use is checked as written out.
+
+pub fn min<T>(a: T, b: T) -> T {
+    if b < a { return b; }
+    return a;
+}
+
+pub fn max<T>(a: T, b: T) -> T {
+    if b > a { return b; }
+    return a;
+}
+
+pub fn clamp<T>(x: T, lo: T, hi: T) -> T {
+    if x < lo { return lo; }
+    if x > hi { return hi; }
+    return x;
+}
+
+// the distance from zero; for an unsigned type that is the number itself. -MIN traps, as everywhere.
+pub fn abs<T>(x: T) -> T {
+    if x < 0 { return 0 - x; }
+    return x;
+}
+
+pub fn swap<T>(a: inout T, b: inout T) {
+    let t = a;
+    a = b;
+    b = t;
+}
