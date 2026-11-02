@@ -38,6 +38,26 @@ char *arena_strn(Arena *a, const char *s, int n) {
     return d;
 }
 
+/* Notes name the generic instances being built or checked, so an error inside one says which and where it was
+ * asked for. They are printed, innermost first, after the error. */
+#define MAX_NOTES 64
+static char *notes[MAX_NOTES];
+static int nnotes;
+
+void note_push(const char *fmt, ...) {
+    char buf[600];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+    if (nnotes < MAX_NOTES) notes[nnotes] = arena_strn(&g_arena, buf, (int)strlen(buf));
+    nnotes++; /* beyond the limit the note is dropped, but the count stays right for note_pop */
+}
+
+void note_pop(void) {
+    if (nnotes > 0) nnotes--;
+}
+
 void die(int line, const char *fmt, ...) {
     va_list ap;
     fprintf(stderr, "%s:%d: error: ", g_file, line);
@@ -45,6 +65,7 @@ void die(int line, const char *fmt, ...) {
     vfprintf(stderr, fmt, ap);
     va_end(ap);
     fputc('\n', stderr);
+    for (int i = (nnotes < MAX_NOTES ? nnotes : MAX_NOTES) - 1; i >= 0; i--) fprintf(stderr, "  note: %s\n", notes[i]);
     exit(1);
 }
 

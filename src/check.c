@@ -198,7 +198,8 @@ static Type *array_type(Type *elem, uint64_t len) {
     size_t n = strlen(elem->name) + strlen(elem->cname) + 64;
     char *name = arena_alloc(&g_arena, n), *cname = arena_alloc(&g_arena, n);
     snprintf(name, n, "[%s; %llu]", elem->name, (unsigned long long)len);
-    snprintf(cname, n, "arr_%s_%llu", elem->kind == TY_ARRAY ? elem->cname : elem->name, (unsigned long long)len);
+    snprintf(cname, n, "arr_%s_%llu", (elem->kind == TY_INT || elem->kind == TY_BOOL) ? elem->name : elem->cname,
+             (unsigned long long)len);
     t->name = name;
     t->cname = cname;
     *tail = t;
@@ -219,14 +220,497 @@ static Type *ptr_type(Type *pointee, bool is_mut) {
     char *name = arena_alloc(&g_arena, n), *cname = arena_alloc(&g_arena, n);
     snprintf(name, n, "*%s %s", is_mut ? "mut" : "const", pointee->name);
     snprintf(cname, n, "ptr_%s_%s", is_mut ? "mut" : "const",
-             (pointee->kind == TY_ARRAY || pointee->kind == TY_PTR) ? pointee->cname : pointee->name);
+             (pointee->kind == TY_INT || pointee->kind == TY_BOOL || pointee->kind == TY_UNIT) ? pointee->name : pointee->cname);
     t->name = name;
     t->cname = cname;
     *tail = t;
     return t;
 }
 
+static Type *resolve_type(Node *ty);
+/* ================================================================ generics ==
+ * A generic struct, enum or function is a template: it is never checked itself. Each use with particular
+ * arguments makes an instance, a copy of the declaration with the parameters replaced, which is registered and
+ * checked exactly like hand-written code. So every safety check runs on every instance, and a generic function
+ * that nothing uses is not checked at all. Instances are appended to the program, after the declarations. */
+#define MAX_INSTS 2048
+#define MAX_INST_DEPTH 48
+static Node *prog_tail;   /* the last declaration: instances are appended here */
+static int n_insts, inst_depth;
+static Node *pending[MAX_INSTS]; /* struct and enum instances made but not yet checked for containing themselves */
+static int npending;
+
+static void resolve_enum(Node *d);
+static void visit_decl(Node *s);
+static int layout_type(Type *t);
+static void expect_type(int line, Type *want, Type *got);
+static bool is_lit(Node *n);
+static uint64_t mask_bits(int bits);
+static int64_t sext(uint64_t v, int bits);
+static int64_t min_signed(int bits);
+static int64_t max_signed(int bits);
+
+static void *gzalloc(size_t n) { return arena_alloc(&g_arena, n ? n : 1); }
+
+static int gen_index(Node *gen, Str name) {
+    int i = 0;
+    for (Node *p = gen; p; p = p->next, i++)
+        if (str_eq(p->name, name)) return i;
+    return -1;
+}
+
+typedef struct {
+    Node *gen;       /* the parameters being replaced */
+    Type **types;    /* per parameter: its type argument, or NULL for a const parameter */
+    uint64_t *vals;  /* per parameter: the value of a const argument */
+    Type **ctypes;   /* per parameter: the type of a const parameter */
+} Subst;
+
+static Node *mk_node(NodeKind k, int line) {
+    Node *n = ARENA_NEW(&g_arena, Node);
+    n->kind = k;
+    n->line = line;
+    n->local = -1;
+    return n;
+}
+
+/* a type that is already known, standing where a written type would be */
+static Node *mk_type_ref(int line, Type *t) {
+    Node *n = mk_node(N_TYPE, line);
+    n->type = t;
+    return n;
+}
+
+/* a constant with a type of its own (flag): it does not take its type from the context like a plain literal */
+static Node *mk_const_lit(int line, Type *t, uint64_t bits) {
+    Node *n = mk_node(N_INT, line);
+    n->flag = 1;
+    n->type = t;
+    int64_t v = t->is_signed ? sext(bits, t->bits) : 0;
+    if (t->is_signed && v < 0) {
+        n->op = 1;
+        n->ival = (uint64_t)0 - (uint64_t)v;
+    } else {
+        n->ival = t->is_signed ? (uint64_t)v : (bits & mask_bits(t->bits));
+    }
+    return n;
+}
+
+static Node *clone_list(Node *n, const Subst *s);
+
+/* A copy of n (not of its siblings), with the generic parameters of s replaced by their arguments. */
+static Node *clone_node(Node *n, const Subst *s) {
+    int k;
+    if (n->kind == N_TYPE && n->op == 0 && !n->gen && !n->type && (k = gen_index(s->gen, n->name)) >= 0)
+        return s->types[k] ? mk_type_ref(n->line, s->types[k]) : mk_const_lit(n->line, s->ctypes[k], s->vals[k]);
+    if (n->kind == N_NAME && (k = gen_index(s->gen, n->name)) >= 0 && !s->types[k])
+        return mk_const_lit(n->line, s->ctypes[k], s->vals[k]);
+    if ((n->kind == N_LET || n->kind == N_PARAM || (n->kind == N_PAT && n->op == PAT_BIND)) &&
+        (k = gen_index(s->gen, n->name)) >= 0 && !s->types[k])
+        die(n->line, "'%.*s' is a const parameter of this declaration, so it cannot also name a variable", SF(n->name));
+    Node *c = ARENA_NEW(&g_arena, Node);
+    *c = *n;
+    c->next = NULL;
+    c->a = clone_list(n->a, s);
+    c->b = clone_list(n->b, s);
+    c->c = clone_list(n->c, s);
+    c->ty = clone_list(n->ty, s);
+    c->gen = clone_list(n->gen, s);
+    return c;
+}
+
+static Node *clone_list(Node *n, const Subst *s) {
+    Node *head = NULL, **tail = &head;
+    for (; n; n = n->next) {
+        *tail = clone_node(n, s);
+        tail = &(*tail)->next;
+    }
+    return head;
+}
+
+/* the instance of a declaration: its parts are copies, and it is no longer generic */
+static Node *clone_decl(Node *tpl, const Subst *s) {
+    Node *c = ARENA_NEW(&g_arena, Node);
+    *c = *tpl;
+    c->next = NULL;
+    c->gen = NULL;
+    c->inst = NULL;
+    c->a = clone_list(tpl->a, s);
+    c->b = clone_list(tpl->b, s);
+    c->c = clone_list(tpl->c, s);
+    c->ty = clone_list(tpl->ty, s);
+    return c;
+}
+
+/* does the tree mention this name (as a type or as a value)? */
+static bool mentions(Node *n, Str name);
+static bool mentions_list(Node *n, Str name) {
+    for (; n; n = n->next)
+        if (mentions(n, name)) return true;
+    return false;
+}
+static bool mentions(Node *n, Str name) {
+    if ((n->kind == N_NAME || (n->kind == N_TYPE && n->op == 0 && !n->type)) && str_eq(n->name, name)) return true;
+    return mentions_list(n->a, name) || mentions_list(n->b, name) || mentions_list(n->c, name) ||
+           mentions_list(n->ty, name) || mentions_list(n->gen, name);
+}
+
+/* ---- names for messages ---- */
+typedef struct { char *p; size_t n, cap; } Sb;
+static void sb_add(Sb *b, const char *s) {
+    size_t l = strlen(s);
+    if (b->n + l + 1 > b->cap) {
+        b->cap = (b->n + l + 1) * 2;
+        b->p = realloc(b->p, b->cap);
+        if (!b->p) die(1, "out of memory");
+    }
+    memcpy(b->p + b->n, s, l + 1);
+    b->n += l;
+}
+
+static const char *inst_display(Node *tpl, Type **types, uint64_t *vals, Type **ctypes) {
+    Sb b = {0};
+    char num[40];
+    sb_add(&b, arena_strn(&g_arena, tpl->name.p, tpl->name.n));
+    sb_add(&b, "<");
+    int i = 0;
+    for (Node *p = tpl->gen; p; p = p->next, i++) {
+        if (i) sb_add(&b, ", ");
+        if (types[i]) {
+            sb_add(&b, types[i]->name);
+        } else if (ctypes[i]->is_signed) {
+            snprintf(num, sizeof num, "%lld", (long long)sext(vals[i], ctypes[i]->bits));
+            sb_add(&b, num);
+        } else {
+            snprintf(num, sizeof num, "%llu", (unsigned long long)vals[i]);
+            sb_add(&b, num);
+        }
+    }
+    sb_add(&b, ">");
+    const char *r = arena_strn(&g_arena, b.p, (int)b.n);
+    free(b.p);
+    return r;
+}
+
+/* ---- the instances of one declaration ---- */
+static Inst *find_inst(Node *tpl, Type **types, uint64_t *vals, int n) {
+    for (Inst *r = tpl->inst; r; r = r->next) {
+        bool same = true;
+        for (int k = 0; k < n && same; k++)
+            same = r->types[k] == types[k] && (types[k] || r->vals[k] == vals[k]);
+        if (same) return r;
+    }
+    return NULL;
+}
+
+static Inst *new_inst(Node *tpl, Type **types, uint64_t *vals, Type **ctypes, int n, int line) {
+    if (n_insts >= MAX_INSTS)
+        die(line, "more than %d generic instances: does a generic function call itself with a bigger type each time?",
+            MAX_INSTS);
+    if (inst_depth >= MAX_INST_DEPTH) die(line, "generic instances nest more than %d deep", MAX_INST_DEPTH);
+    Inst *r = ARENA_NEW(&g_arena, Inst);
+    r->origin = tpl;
+    r->n = n;
+    r->types = gzalloc(sizeof(Type *) * (size_t)n);
+    r->vals = gzalloc(sizeof(uint64_t) * (size_t)n);
+    r->ctypes = gzalloc(sizeof(Type *) * (size_t)n);
+    memcpy(r->types, types, sizeof(Type *) * (size_t)n);
+    memcpy(r->vals, vals, sizeof(uint64_t) * (size_t)n);
+    memcpy(r->ctypes, ctypes, sizeof(Type *) * (size_t)n);
+    r->id = ++n_insts;
+    r->line = line;
+    r->name = inst_display(tpl, types, vals, ctypes);
+    r->next = tpl->inst;
+    tpl->inst = r;
+    return r;
+}
+
+/* Instances made while others are still being built wait until the outermost one is done: only then are all
+ * the field types they depend on known, so they can be checked for containing themselves and laid out. */
+static void finish_pending(void) {
+    int n = npending;
+    npending = 0;
+    for (int i = 0; i < n; i++) visit_decl(pending[i]);
+    for (int i = 0; i < n; i++)
+        if (pending[i]->kind == N_STRUCT) layout_type(pending[i]->type);
+}
+
+static Type *instantiate_type(Node *tpl, Type **types, uint64_t *vals, Type **ctypes, int line) {
+    int n = list_len(tpl->gen);
+    Inst *r = find_inst(tpl, types, vals, n);
+    if (r) return r->decl->type;
+    r = new_inst(tpl, types, vals, ctypes, n, line);
+    Subst s = {tpl->gen, types, vals, ctypes};
+    Node *d = clone_decl(tpl, &s);
+    d->inst = r;
+    r->decl = d;
+    bool is_enum = tpl->kind == N_ENUM;
+    Type *t = ARENA_NEW(&g_arena, Type);
+    t->kind = is_enum ? TY_ENUM : TY_STRUCT;
+    t->nleaves = is_enum ? 1 : 0;
+    t->name = r->name;
+    char *cn = arena_alloc(&g_arena, (size_t)tpl->name.n + 24);
+    snprintf(cn, (size_t)tpl->name.n + 24, "%c%d_%.*s", is_enum ? 'e' : 's', r->id, SF(tpl->name));
+    t->cname = cn;
+    t->decl = d;
+    t->is_copy = d->op != 0;
+    d->type = t;
+    prog_tail->next = d;
+    prog_tail = d;
+
+    note_push("in '%s', which was asked for on line %d", r->name, line);
+    inst_depth++;
+    if (is_enum) {
+        resolve_enum(d);
+    } else {
+        for (Node *f = d->a; f; f = f->next) {
+            for (Node *g = d->a; g != f; g = g->next)
+                if (str_eq(g->name, f->name)) die(f->line, "field '%.*s' declared twice", SF(f->name));
+            f->type = resolve_type(f->ty);
+        }
+    }
+    /* a generic type is copy when its declaration says so and every value it holds is copy */
+    bool all_copy = true;
+    if (is_enum) {
+        for (Node *v = d->a; v; v = v->next)
+            for (Node *f = v->a; f; f = f->next) all_copy = all_copy && f->type->is_copy;
+    } else {
+        for (Node *f = d->a; f; f = f->next) all_copy = all_copy && f->type->is_copy;
+    }
+    t->is_copy = d->op != 0 && all_copy;
+    pending[npending++] = d;
+    inst_depth--;
+    note_pop();
+    if (inst_depth == 0) finish_pending();
+    return t;
+}
+
+static Node *instantiate_fn(Node *tpl, Type **types, uint64_t *vals, Type **ctypes, int line) {
+    int n = list_len(tpl->gen);
+    Inst *r = find_inst(tpl, types, vals, n);
+    if (r) return r->decl;
+    r = new_inst(tpl, types, vals, ctypes, n, line);
+    Subst s = {tpl->gen, types, vals, ctypes};
+    Node *d = clone_decl(tpl, &s);
+    d->inst = r;
+    r->decl = d;
+    note_push("in '%s', which was asked for on line %d", r->name, line);
+    inst_depth++;
+    for (Node *p = d->a; p; p = p->next) {
+        for (Node *q = d->a; q != p; q = q->next)
+            if (str_eq(q->name, p->name)) die(p->line, "parameter '%.*s' declared twice", SF(p->name));
+        p->type = resolve_type(p->ty);
+    }
+    d->type = d->ty ? resolve_type(d->ty) : ty_unit;
+    inst_depth--;
+    note_pop();
+    prog_tail->next = d;
+    prog_tail = d;
+    if (inst_depth == 0) finish_pending();
+    return d;
+}
+
+/* ---- working out the arguments ---- */
+typedef struct {
+    Node *tpl;
+    int n;
+    Type **types;
+    uint64_t *vals;
+    Type **ctypes;
+    bool *bound;
+} Bind;
+
+static void bind_init(Bind *b, Node *tpl) {
+    b->tpl = tpl;
+    b->n = list_len(tpl->gen);
+    b->types = gzalloc(sizeof(Type *) * (size_t)b->n);
+    b->vals = gzalloc(sizeof(uint64_t) * (size_t)b->n);
+    b->ctypes = gzalloc(sizeof(Type *) * (size_t)b->n);
+    b->bound = gzalloc((size_t)b->n);
+    int i = 0;
+    for (Node *p = tpl->gen; p; p = p->next, i++) {
+        if (p->op != 1) continue;
+        Type *t = resolve_type(p->ty);
+        if (t->kind != TY_INT)
+            die(p->line, "const parameter '%.*s' must have an integer type, not '%s'", SF(p->name), t->name);
+        b->ctypes[i] = t;
+    }
+}
+
+static Str param_name(Bind *b, int k) {
+    Node *p = b->tpl->gen;
+    while (k-- > 0) p = p->next;
+    return p->name;
+}
+
+/* an argument that is a type parameter's name or a const parameter's name: which one is it? */
+static int param_of(Bind *b, Node *n) {
+    if ((n->kind == N_NAME || (n->kind == N_TYPE && n->op == 0 && !n->gen && !n->type))) return gen_index(b->tpl->gen, n->name);
+    return -1;
+}
+
+static void bind_type(Bind *b, int k, Type *t, int line, bool soft) {
+    if (b->bound[k]) {
+        if (!soft && b->types[k] != t)
+            die(line, "'%.*s' is both '%s' and '%s'", SF(param_name(b, k)), b->types[k]->name, t->name);
+        return;
+    }
+    b->types[k] = t;
+    b->bound[k] = true;
+}
+
+static void bind_val(Bind *b, int k, uint64_t v, int line, bool soft) {
+    if (b->bound[k]) {
+        if (!soft && b->vals[k] != v)
+            die(line, "'%.*s' is both %llu and %llu", SF(param_name(b, k)), (unsigned long long)b->vals[k], (unsigned long long)v);
+        return;
+    }
+    Type *ct = b->ctypes[k];
+    bool fits = ct->is_signed ? ((int64_t)v >= min_signed(ct->bits) && (int64_t)v <= max_signed(ct->bits))
+                              : v <= mask_bits(ct->bits);
+    if (!fits)
+        die(line, "%llu does not fit in '%s', the type of const parameter '%.*s'", (unsigned long long)v, ct->name,
+            SF(param_name(b, k)));
+    b->vals[k] = v;
+    b->bound[k] = true;
+}
+
+/* Match the written type `pat` (in the template, with its parameters in it) against a real type, and bind the
+ * parameters it names. `soft`: only fill parameters that are still open. */
+static void unify(Bind *b, Node *pat, Type *actual, bool soft) {
+    if (pat->kind != N_TYPE || pat->type) return;
+    if (pat->op == 1) { /* [X; N] */
+        if (actual->kind != TY_ARRAY) return;
+        unify(b, pat->a, actual->elem, soft);
+        int k = param_of(b, pat->b);
+        if (k >= 0 && b->ctypes[k]) bind_val(b, k, actual->len, pat->line, soft);
+        return;
+    }
+    if (pat->op == 2) { /* *mut X */
+        if (actual->kind == TY_PTR) unify(b, pat->a, actual->elem, soft);
+        return;
+    }
+    int k = pat->gen ? -1 : gen_index(b->tpl->gen, pat->name);
+    if (k >= 0) {
+        if (!b->ctypes[k]) bind_type(b, k, actual, pat->line, soft);
+        return;
+    }
+    if (pat->gen) { /* Name<args>: an instance of that generic type */
+        Node *g = find_decl(pat->name);
+        Inst *r = actual->decl ? actual->decl->inst : NULL;
+        if (!g || !g->gen || !r || r->origin != g) return;
+        int i = 0;
+        for (Node *a = pat->gen; a && i < r->n; a = a->next, i++) {
+            if (r->types[i]) {
+                unify(b, a, r->types[i], soft);
+            } else {
+                int k2 = param_of(b, a);
+                if (k2 >= 0 && b->ctypes[k2]) bind_val(b, k2, r->vals[i], a->line, soft);
+            }
+        }
+    }
+}
+
+static Type *type_arg(Node *a) {
+    if (a->kind == N_INT) die(a->line, "expected a type, found a number");
+    return resolve_type(a);
+}
+
+/* the value of a const argument: a number or the name of a constant, of the const parameter's type */
+static uint64_t const_arg_value(Node *arg, Type *pt) {
+    Node *e = ARENA_NEW(&g_arena, Node);
+    *e = *arg;
+    e->next = NULL;
+    if (arg->kind == N_TYPE) {
+        if (arg->op != 0 || arg->gen || arg->type) die(arg->line, "expected a constant number here, found a type");
+        e->kind = N_NAME;
+    }
+    int saved = unsafe_depth;
+    unsafe_depth = 0;
+    const_ctx++;
+    Type *t = check_expr(e, pt);
+    const_ctx--;
+    unsafe_depth = saved;
+    if (e->kind != N_INT) die(arg->line, "a generic argument for a const parameter must be a compile-time constant");
+    expect_type(arg->line, pt, t);
+    return e->op ? (uint64_t)0 - e->ival : e->ival;
+}
+
+static void apply_explicit(Bind *b, Node *args, int line) {
+    int given = list_len(args);
+    if (given > b->n)
+        die(line, "'%.*s' takes %d generic argument%s, but %d given", SF(b->tpl->name), b->n, b->n == 1 ? "" : "s", given);
+    int k = 0;
+    for (Node *a = args; a; a = a->next, k++) {
+        if (b->ctypes[k]) bind_val(b, k, const_arg_value(a, b->ctypes[k]), a->line, false);
+        else bind_type(b, k, type_arg(a), a->line, false);
+    }
+}
+
+static void bind_from_inst(Bind *b, Inst *r) {
+    for (int k = 0; k < b->n && k < r->n; k++) {
+        if (r->types[k]) bind_type(b, k, r->types[k], 0, true);
+        else bind_val(b, k, r->vals[k], 0, true);
+    }
+}
+
+/* The real type for a written type of the template, if every parameter it names is known yet. */
+static Type *subst_type(Bind *b, Node *pat) {
+    int k = 0;
+    for (Node *p = b->tpl->gen; p; p = p->next, k++)
+        if (!b->bound[k] && mentions(pat, p->name)) return NULL;
+    Subst s = {b->tpl->gen, b->types, b->vals, b->ctypes};
+    return resolve_type(clone_node(pat, &s));
+}
+
+/* Check the values of a call, struct literal or variant while working out the parameters from their types.
+ * pats[i] is the written type the template gives value i, exprs[i] the expression, and pre[i] gets its type.
+ * Values that are plain numbers go last, so another value can decide their type: f(1, x) with x a u8. */
+static void infer_values(Bind *b, Node **pats, Node **exprs, int nv, Type **pre, Node *ret_pat, Type *expect) {
+    for (int pass = 0; pass < 2; pass++) {
+        if (pass == 1 && ret_pat && expect) unify(b, ret_pat, expect, true); /* what the arguments left open */
+        for (int i = 0; i < nv; i++) {
+            if (is_lit(exprs[i]) != (pass == 1)) continue;
+            Type *want = subst_type(b, pats[i]);
+            pre[i] = check_expr(exprs[i], want);
+            if (!want) unify(b, pats[i], pre[i], false);
+        }
+    }
+}
+
+static void require_bound(Bind *b, int line, const char *how) {
+    int k = 0;
+    for (Node *p = b->tpl->gen; p; p = p->next, k++)
+        if (!b->bound[k])
+            die(line, "cannot work out the %s '%.*s' of '%.*s': %s", p->op ? "const parameter" : "type parameter",
+                SF(p->name), SF(b->tpl->name), how);
+}
+
+/* the struct or enum a literal or variant makes, when the declaration is generic */
+static Type *infer_instance(Node *tpl, Node *targs, int line, Type *expect, Node **pats, Node **exprs, int nv, Type **pre) {
+    Bind b;
+    bind_init(&b, tpl);
+    apply_explicit(&b, targs, line);
+    if (expect && expect->decl && expect->decl->inst && expect->decl->inst->origin == tpl) bind_from_inst(&b, expect->decl->inst);
+    infer_values(&b, pats, exprs, nv, pre, NULL, NULL);
+    require_bound(&b, line, "write the arguments out, as in 'Name::<...>', or give the variable its type");
+    return instantiate_type(tpl, b.types, b.vals, b.ctypes, line);
+}
+
+/* A written type with generic arguments: Pair<i32, bool>, Vec<u8, 8>. */
+static Type *instantiate_written(Node *tpl, Node *ty) {
+    int np = list_len(tpl->gen), na = list_len(ty->gen);
+    if (na != np)
+        die(ty->line, "'%.*s' takes %d generic argument%s, but %d given", SF(tpl->name), np, np == 1 ? "" : "s", na);
+    Bind b;
+    bind_init(&b, tpl);
+    apply_explicit(&b, ty->gen, ty->line);
+    return instantiate_type(tpl, b.types, b.vals, b.ctypes, ty->line);
+}
+
 static Type *resolve_type(Node *ty) {
+    if (ty->type) return ty->type; /* a generic parameter that has been replaced by its argument */
+    if (ty->kind != N_TYPE) die(ty->line, "expected a type, found a number");
     if (ty->op == 2) /* *mut T, *const T */
         return ptr_type(resolve_type(ty->a), ty->ival != 0);
     if (ty->op == 1) { /* [T; N] */
@@ -239,7 +723,14 @@ static Type *resolve_type(Node *ty) {
     for (int i = 1; i < NPRIMS; i++)
         if (str_is(ty->name, prims[i].name)) return &prims[i];
     Node *s = find_decl(ty->name);
-    if (s) return s->type;
+    if (s) {
+        if (s->gen) {
+            if (!ty->gen) die(ty->line, "'%.*s' is generic: write its arguments, as in %.*s<...>", SF(s->name), SF(s->name));
+            return instantiate_written(s, ty);
+        }
+        if (ty->gen) die(ty->line, "'%.*s' is not generic, so it takes no type arguments", SF(s->name));
+        return s->type;
+    }
     die(ty->line, "unknown type '%.*s'", SF(ty->name));
 }
 
@@ -434,7 +925,7 @@ static void fold(Node *n) {
 static bool is_lit(Node *n) { /* a constant whose integer type comes from context */
     switch (n->kind) {
     case N_INT:
-        return true;
+        return !n->flag; /* a const generic argument has a type of its own */
     case N_UN:
         return (n->op == T_MINUS || n->op == T_TILDE) && is_lit(n->a);
     case N_BIN:
@@ -500,7 +991,38 @@ static void check_c_signature(Node *fn) {
         die(fn->line, "function '%.*s': an array cannot be returned across the C boundary", SF(fn->name));
 }
 
-static Type *check_call(Node *n) {
+/* A call of a generic function: work out the instance from the arguments (and the expected type), and say what
+ * type each argument turned out to have, so that they are not checked a second time. */
+static Node *infer_call(Node *tpl, Node *n, Type *expect, Type ***pre_out) {
+    int nv = list_len(n->a), np = list_len(tpl->a);
+    if (np != nv)
+        die(n->line, "function '%.*s' takes %d argument%s, got %d", SF(n->name), np, np == 1 ? "" : "s", nv);
+    Bind b;
+    bind_init(&b, tpl);
+    apply_explicit(&b, n->gen, n->line);
+    Node **pats = gzalloc(sizeof(Node *) * (size_t)nv), **exprs = gzalloc(sizeof(Node *) * (size_t)nv);
+    Type **pre = gzalloc(sizeof(Type *) * (size_t)nv);
+    int i = 0;
+    for (Node *p = tpl->a, *a = n->a; a; p = p->next, a = a->next, i++) {
+        pats[i] = p->ty;
+        if (p->op == M_INOUT || p->op == M_SET) {
+            if (a->kind != N_ADDR)
+                die(a->line, "argument for %s parameter '%.*s' must be written '&place'", p->op == M_SET ? "set" : "inout",
+                    SF(p->name));
+            exprs[i] = a->a;
+        } else {
+            if (a->kind == N_ADDR)
+                die(a->line, "'&' is only for inout or set parameters, but '%.*s' is not inout or set", SF(p->name));
+            exprs[i] = a;
+        }
+    }
+    infer_values(&b, pats, exprs, nv, pre, tpl->ty, expect);
+    require_bound(&b, n->line, "write the arguments out, as in 'name::<...>(...)', or give the result its type");
+    *pre_out = pre;
+    return instantiate_fn(tpl, b.types, b.vals, b.ctypes, n->line);
+}
+
+static Type *check_call(Node *n, Type *expect) {
     Node *fn = lookup_fn(n->name);
     if (!fn && g_freestanding && str_is(n->name, "print"))
         die(n->line, "'print' needs a hosted C library (it uses stdio), but this is a freestanding build");
@@ -512,25 +1034,29 @@ static Type *check_call(Node *n) {
         snprintf(what, sizeof what, "calling the extern function '%.*s'", SF(n->name));
         require_unsafe(n, what);
     }
+    Type **pre = NULL; /* the argument types, when a generic call has already checked them */
+    if (fn->gen) fn = infer_call(fn, n, expect, &pre);
+    else if (n->gen) die(n->line, "function '%.*s' is not generic, so it takes no type arguments", SF(n->name));
     int want = 0, got = 0;
     for (Node *p = fn->a; p; p = p->next) want++;
     for (Node *a = n->a; a; a = a->next) got++;
     if (want != got)
         die(n->line, "function '%.*s' takes %d argument%s, got %d", SF(n->name), want, want == 1 ? "" : "s", got);
     Node *p = fn->a;
-    for (Node *a = n->a; a; a = a->next, p = p->next) {
+    int ai = 0;
+    for (Node *a = n->a; a; a = a->next, p = p->next, ai++) {
         Type *at;
         if (p->op == M_INOUT || p->op == M_SET) {
             const char *mode = p->op == M_SET ? "set" : "inout";
             if (a->kind != N_ADDR)
                 die(a->line, "argument for %s parameter '%.*s' must be written '&place'", mode, SF(p->name));
-            at = check_expr(a->a, p->type);
+            at = pre ? pre[ai] : check_expr(a->a, p->type);
             require_mutable_place(a->a, p->op == M_SET ? "passed as set" : "passed as inout");
             a->type = at;
         } else {
             if (a->kind == N_ADDR)
                 die(a->line, "'&' is only for inout or set parameters, but '%.*s' is not inout or set", SF(p->name));
-            at = check_expr(a, p->type);
+            at = pre ? pre[ai] : check_expr(a, p->type);
         }
         expect_type(a->line, p->type, at);
     }
@@ -900,6 +1426,7 @@ static Type *check_match(Node *m, Type *expect) {
 static Type *check_expr_inner(Node *n, Type *expect) {
     switch (n->kind) {
     case N_INT:
+        if (n->flag) return n->type;
         return check_int_literal(n, expect);
     case N_BOOL:
         return ty_bool;
@@ -915,8 +1442,25 @@ static Type *check_expr_inner(Node *n, Type *expect) {
             die(n->line, "'%.*s::%.*s' has no values; write it without parentheses", SF(ed->name), SF(v->name));
         if (want != got)
             die(n->line, "'%.*s::%.*s' needs %d value%s, got %d", SF(ed->name), SF(v->name), want, want == 1 ? "" : "s", got);
+        Type **pre = NULL;
+        if (ed->gen) { /* a generic enum: the values (or the expected type) decide which instance */
+            Node **pats = gzalloc(sizeof(Node *) * (size_t)got), **exprs = gzalloc(sizeof(Node *) * (size_t)got);
+            pre = gzalloc(sizeof(Type *) * (size_t)got);
+            int k = 0;
+            for (Node *f = v->a, *a = n->a; a; f = f->next, a = a->next, k++) {
+                pats[k] = f->ty;
+                exprs[k] = a;
+            }
+            Type *et = infer_instance(ed, n->gen, n->line, expect, pats, exprs, got, pre);
+            ed = et->decl;
+            v = find_variant(ed, n->name);
+        } else if (n->gen) {
+            die(n->line, "enum '%.*s' is not generic, so it takes no type arguments", SF(ed->name));
+        }
         Node *f = v->a;
-        for (Node *a = n->a; a; a = a->next, f = f->next) expect_type(a->line, f->type, check_expr(a, f->type));
+        int k = 0;
+        for (Node *a = n->a; a; a = a->next, f = f->next, k++)
+            expect_type(a->line, f->type, pre ? pre[k] : check_expr(a, f->type));
         n->decl = v;
         return ed->type;
     }
@@ -949,7 +1493,7 @@ static Type *check_expr_inner(Node *n, Type *expect) {
         return f->type;
     }
     case N_CALL:
-        return is_intrinsic(n->name) ? check_intrinsic(n, expect) : check_call(n);
+        return is_intrinsic(n->name) ? check_intrinsic(n, expect) : check_call(n, expect);
     case N_INDEX: {
         if (!is_place(n->a)) die(n->line, "only an array variable, field or element can be indexed");
         Type *at = check_expr(n->a, NULL);
@@ -989,13 +1533,31 @@ static Type *check_expr_inner(Node *n, Type *expect) {
     case N_LIT: {
         Node *s = find_struct(n->name);
         if (!s) die(n->line, "unknown struct '%.*s'", SF(n->name));
-        for (Node *i = n->a; i; i = i->next) {
+        Type **pre = NULL;
+        if (s->gen) { /* a generic struct: the values (or the expected type) decide which instance */
+            int nv = list_len(n->a), k = 0;
+            Node **pats = gzalloc(sizeof(Node *) * (size_t)nv), **exprs = gzalloc(sizeof(Node *) * (size_t)nv);
+            pre = gzalloc(sizeof(Type *) * (size_t)nv);
+            for (Node *i = n->a; i; i = i->next, k++) {
+                Node *f = find_field(s, i->name);
+                if (!f) die(i->line, "struct '%.*s' has no field '%.*s'", SF(s->name), SF(i->name));
+                for (Node *j = n->a; j != i; j = j->next)
+                    if (str_eq(j->name, i->name)) die(i->line, "field '%.*s' given twice", SF(i->name));
+                pats[k] = f->ty;
+                exprs[k] = i->a;
+            }
+            s = infer_instance(s, n->gen, n->line, expect, pats, exprs, nv, pre)->decl;
+        } else if (n->gen) {
+            die(n->line, "struct '%.*s' is not generic, so it takes no type arguments", SF(s->name));
+        }
+        int vi = 0;
+        for (Node *i = n->a; i; i = i->next, vi++) {
             Node *f = find_field(s, i->name);
             if (!f) die(i->line, "struct '%.*s' has no field '%.*s'", SF(s->name), SF(i->name));
             for (Node *j = n->a; j != i; j = j->next)
                 if (str_eq(j->name, i->name)) die(i->line, "field '%.*s' given twice", SF(i->name));
             i->decl = f;
-            expect_type(i->line, f->type, check_expr(i->a, f->type));
+            expect_type(i->line, f->type, pre ? pre[vi] : check_expr(i->a, f->type));
         }
         for (Node *f = s->a; f; f = f->next) {
             bool given = false;
@@ -1207,7 +1769,7 @@ static void resolve_enum(Node *d) {
             if (str_eq(w->name, v->name)) die(v->line, "variant '%.*s' is declared twice", SF(v->name));
         for (Node *f = v->a; f; f = f->next) {
             f->type = resolve_type(f->ty);
-            if (d->type->is_copy && !f->type->is_copy)
+            if (!d->inst && d->type->is_copy && !f->type->is_copy)
                 die(f->line, "'%s' in variant '%.*s' is not copy, so '%.*s' cannot be a copy enum", f->type->name,
                     SF(v->name), SF(d->name));
         }
@@ -1273,6 +1835,7 @@ static void check_fn(Node *fn) {
     depth = 1;
     next_id = 0;
     unsafe_depth = 0;
+    if (fn->inst) note_push("in '%s', which was asked for on line %d", fn->inst->name, fn->inst->line);
     for (Node *p = fn->a; p; p = p->next)
         p->local = declare(p->line, p->name, p->type, p->op == M_INOUT || p->op == M_SET, p->op == M_INOUT || p->op == M_SET,
                            p->op == M_INOUT ? LK_INOUT : p->op == M_SET ? LK_SET : p->op == M_SINK ? LK_SINK : LK_LETPARAM);
@@ -1282,10 +1845,13 @@ static void check_fn(Node *fn) {
     if (next_id) memcpy(fn->linfo, fn_locals, sizeof(LocalInfo) * (size_t)next_id);
     if (fn->type != ty_unit && !always_returns(fn->b))
         die(fn->line, "function '%.*s' does not return a value on every path", SF(fn->name));
+    if (fn->inst) note_pop();
 }
 
-void check_program(Node *program) {
+Node *check_program(Node *program) {
     prog = program;
+    prog_tail = program;
+    while (prog_tail && prog_tail->next) prog_tail = prog_tail->next;
     prims[10].bits = prims[11].bits = g_ptr_bits; /* usize / isize */
 
     builtin_print.kind = N_FN;
@@ -1311,9 +1877,18 @@ void check_program(Node *program) {
         bool is_type = d->kind == N_STRUCT || d->kind == N_ENUM;
         Map *m = is_type ? &struct_map : d->kind == N_CONST ? &const_map : &fn_map;
         if (!map_put(m, d->name, d)) die(d->line, "'%.*s' is defined twice", SF(d->name));
+        if (d->gen) {
+            for (Node *p = d->gen; p; p = p->next)
+                for (Node *q = d->gen; q != p; q = q->next)
+                    if (str_eq(p->name, q->name)) die(p->line, "generic parameter '%.*s' declared twice", SF(p->name));
+            if (d->kind == N_FN && d->ext != EXT_NONE)
+                die(d->line, "a function that is shared with C cannot be generic: C has no generics");
+            if (d->kind == N_FN && str_is(d->name, "main")) die(d->line, "'main' cannot be generic");
+        }
         if (is_type) {
             for (int i = 0; i < NPRIMS; i++)
                 if (str_is(d->name, prims[i].name)) die(d->line, "'%.*s' is a builtin type", SF(d->name));
+            if (d->gen) continue; /* a template: its instances get their own types */
             Type *t = ARENA_NEW(&g_arena, Type);
             t->kind = d->kind == N_ENUM ? TY_ENUM : TY_STRUCT;
             t->nleaves = d->kind == N_ENUM ? 1 : 0; /* flow treats an enum as one unit, like an array */
@@ -1330,9 +1905,10 @@ void check_program(Node *program) {
         }
     }
 
-    /* 2. struct fields */
+    /* 2. struct fields. Generic instances made on the way wait (inst_depth) until every plain type is resolved. */
+    inst_depth = 1;
     for (Node *d = prog; d; d = d->next) {
-        if (d->kind != N_STRUCT) continue;
+        if (d->kind != N_STRUCT || d->gen || d->inst) continue;
         for (Node *f = d->a; f; f = f->next) {
             for (Node *g = d->a; g != f; g = g->next)
                 if (str_eq(g->name, f->name)) die(f->line, "field '%.*s' declared twice", SF(f->name));
@@ -1340,11 +1916,13 @@ void check_program(Node *program) {
         }
     }
     for (Node *d = prog; d; d = d->next)
-        if (d->kind == N_ENUM) resolve_enum(d);
+        if (d->kind == N_ENUM && !d->gen && !d->inst) resolve_enum(d);
+    inst_depth = 0;
+    finish_pending();
     for (Node *d = prog; d; d = d->next)
-        if (d->kind == N_STRUCT || d->kind == N_ENUM) visit_decl(d);
+        if ((d->kind == N_STRUCT || d->kind == N_ENUM) && !d->gen && !d->inst) visit_decl(d);
     for (Node *d = prog; d; d = d->next) {
-        if (d->kind != N_STRUCT) continue;
+        if (d->kind != N_STRUCT || d->gen || d->inst) continue;
         layout_type(d->type);
         if (!d->type->is_copy) continue;
         for (Node *f = d->a; f; f = f->next)
@@ -1358,7 +1936,7 @@ void check_program(Node *program) {
         if (d->kind == N_CONST) const_resolve(d);
     Node *main_fn = NULL;
     for (Node *d = prog; d; d = d->next) {
-        if (d->kind != N_FN) continue;
+        if (d->kind != N_FN || d->gen || d->inst) continue;
         for (Node *p = d->a; p; p = p->next) {
             for (Node *q = d->a; q != p; q = q->next)
                 if (str_eq(q->name, p->name)) die(p->line, "parameter '%.*s' declared twice", SF(p->name));
@@ -1373,6 +1951,19 @@ void check_program(Node *program) {
         die(main_fn->line, "'main' must be declared as 'fn main() -> i32'");
 
     /* 4. bodies (extern functions have none) */
-    for (Node *d = prog; d; d = d->next)
-        if (d->kind == N_FN && d->ext != EXT_EXTERN) check_fn(d);
+    for (Node *d = prog; d; d = d->next) /* instances made by calls are appended, and checked in their turn */
+        if (d->kind == N_FN && d->ext != EXT_EXTERN && !d->gen) check_fn(d);
+
+    /* the later passes see instances only, not the generic templates */
+    Node *head = NULL, **tail = &head;
+    for (Node *d = prog; d;) {
+        Node *next = d->next;
+        if (!d->gen) {
+            *tail = d;
+            tail = &d->next;
+        }
+        d = next;
+    }
+    *tail = NULL;
+    return head;
 }

@@ -35,8 +35,75 @@ static Node *mk(NodeKind k, int line) {
     return n;
 }
 
-/* Type  ::=  Name  |  "[" Type ";" ConstExpr "]"  |  "*" ("mut" | "const") Type
- * N_TYPE: op 0 named, 1 array (a = element, b = length expression), 2 pointer (a = pointee, ival = is mut) */
+static Node *parse_type(void);
+
+/* the '>' that closes a list of generic parameters or arguments; `>>` closes two lists at once */
+static void expect_gt(void) {
+    Token *t = cur();
+    if (t->kind == T_SHR) { /* Option<Option<i32>>: split the token, take the first '>' */
+        t->kind = T_GT;
+        t->text.p += 1;
+        t->text.n = 1;
+        return;
+    }
+    expect(T_GT);
+}
+
+static bool is_prim_name(Str s) {
+    static const char *const prims[] = {"i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "usize", "isize", "bool"};
+    for (size_t i = 0; i < sizeof prims / sizeof *prims; i++)
+        if (str_is(s, prims[i])) return true;
+    return false;
+}
+
+/* Generic parameters of a declaration:  <T, U, const N: usize>   (none: NULL) */
+static Node *parse_tparams(void) {
+    if (!accept(T_LT)) return NULL;
+    Node *head = NULL, **tail = &head;
+    while (cur()->kind != T_GT && cur()->kind != T_SHR) {
+        Node *p = mk(N_TPARAM, cur()->line);
+        if (accept(T_CONST)) {
+            p->op = 1;
+            p->name = expect(T_IDENT)->text;
+            expect(T_COLON);
+            p->ty = parse_type();
+        } else {
+            p->name = expect(T_IDENT)->text;
+            if (cur()->kind == T_COLON)
+                die(cur()->line, "bounds on type parameters are not supported: generic code is checked for each type it is used with");
+        }
+        *tail = p;
+        tail = &p->next;
+        if (!accept(T_COMMA)) break;
+    }
+    if (!head) die(cur()->line, "a list of generic parameters needs at least one parameter");
+    expect_gt();
+    return head;
+}
+
+/* Generic arguments, after the '<':  i32, [u8; 4], 8, BUF_LEN   (a type, or a constant for a const parameter) */
+static Node *parse_targs(void) {
+    Node *head = NULL, **tail = &head;
+    while (cur()->kind != T_GT && cur()->kind != T_SHR) {
+        Node *a;
+        if (cur()->kind == T_INT) {
+            a = mk(N_INT, cur()->line);
+            a->ival = cur()->ival;
+            advance();
+        } else {
+            a = parse_type(); /* a name here may turn out to be a constant: decided when the parameter is known */
+        }
+        *tail = a;
+        tail = &a->next;
+        if (!accept(T_COMMA)) break;
+    }
+    if (!head) die(cur()->line, "a list of generic arguments needs at least one argument");
+    expect_gt();
+    return head;
+}
+
+/* Type  ::=  Name [ "<" Args ">" ]  |  "[" Type ";" ConstExpr "]"  |  "*" ("mut" | "const") Type
+ * N_TYPE: op 0 named (gen = the arguments), 1 array (a = element, b = length expression), 2 pointer (a = pointee, ival = is mut) */
 static Node *parse_expr(void);
 static Node *parse_type(void) {
     Token *t = cur();
@@ -59,6 +126,11 @@ static Node *parse_type(void) {
         return n;
     }
     n->name = expect(T_IDENT)->text;
+    /* a primitive never has arguments, so `x as i32 < y` stays a comparison */
+    if (cur()->kind == T_LT && !is_prim_name(n->name)) {
+        advance();
+        n->gen = parse_targs();
+    }
     return n;
 }
 
@@ -126,12 +198,19 @@ static Node *parse_primary(void) {
         return parse_match();
     case T_IDENT: {
         advance();
+        Node *targs = NULL; /* name::<A, B>: generic arguments written out */
+        if (cur()->kind == T_COLONCOLON && peek(1)->kind == T_LT) {
+            advance();
+            advance();
+            targs = parse_targs();
+        }
         if (cur()->kind == T_COLONCOLON) { /* Enum::Variant or Enum::Variant(values) */
             advance();
             Token *v = expect(T_IDENT);
             Node *n = mk(N_VARIANT, t->line);
             n->tyname = t->text;
             n->name = v->text;
+            n->gen = targs;
             if (cur()->kind == T_LPAREN) {
                 advance();
                 n->flag = 1;
@@ -152,6 +231,7 @@ static Node *parse_primary(void) {
             advance();
             Node *n = mk(N_CALL, t->line);
             n->name = t->text;
+            n->gen = targs;
             int save = nolit;
             nolit = 0;
             Node **tail = &n->a;
@@ -170,6 +250,7 @@ static Node *parse_primary(void) {
             advance();
             Node *n = mk(N_LIT, t->line);
             n->name = t->text;
+            n->gen = targs;
             int save = nolit;
             nolit = 0;
             Node **tail = &n->a;
@@ -187,6 +268,7 @@ static Node *parse_primary(void) {
             expect(T_RBRACE);
             return n;
         }
+        if (targs) die(t->line, "generic arguments must be followed by '::Variant', a call '(...)' or a struct literal '{ ... }'");
         Node *n = mk(N_NAME, t->line);
         n->name = t->text;
         return n;
@@ -500,6 +582,7 @@ static Node *parse_enum(bool is_copy) {
     Node *e = mk(N_ENUM, line);
     e->op = is_copy;
     e->name = expect(T_IDENT)->text;
+    e->gen = parse_tparams();
     expect(T_LBRACE);
     Node **tail = &e->a;
     int index = 0;
@@ -535,6 +618,7 @@ static Node *parse_struct(bool is_copy) {
     Node *s = mk(N_STRUCT, line);
     s->op = is_copy;
     s->name = expect(T_IDENT)->text;
+    s->gen = parse_tparams();
     expect(T_LBRACE);
     Node **tail = &s->a;
     while (cur()->kind != T_RBRACE) {
@@ -562,6 +646,7 @@ static Node *parse_fn(int ext) {
     Node *f = mk(N_FN, line);
     f->ext = ext;
     f->name = expect(T_IDENT)->text;
+    f->gen = parse_tparams();
     expect(T_LPAREN);
     Node **tail = &f->a;
     while (cur()->kind != T_RPAREN) {

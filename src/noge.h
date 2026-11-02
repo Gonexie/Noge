@@ -36,6 +36,8 @@ char *arena_strn(Arena *a, const char *s, int n);
 /* ---- diagnostics ---- */
 extern const char *g_file;
 NORETURN PRINTF_FMT(2, 3) void die(int line, const char *fmt, ...);
+PRINTF_FMT(1, 2) void note_push(const char *fmt, ...); /* a line printed after the next error, saying where we are */
+void note_pop(void);
 char *read_file(const char *path);
 
 /* ---- tokens ---- */
@@ -122,7 +124,9 @@ typedef enum {
     /* declarations */
     N_FN, N_PARAM, N_STRUCT, N_FDECL, N_TYPE, N_CONST, N_ENUM, N_VDECL,
     /* parts of a match */
-    N_ARM, N_PAT
+    N_ARM, N_PAT,
+    /* a generic parameter of a declaration: `T`, or `const N: usize` */
+    N_TPARAM
 } NodeKind;
 
 /* N_PAT: what a pattern is */
@@ -159,13 +163,29 @@ struct Node {
     int index;     /* VDECL: position of the variant in its enum */
     int flag;      /* VDECL / VARIANT / PAT: written with parentheses; MATCH: used as a statement */
     LocalInfo *linfo; /* FN: every local variable by id (parameters first) */
+    Node *gen;        /* FN / STRUCT / ENUM: its generic parameters (N_TPARAM); TYPE / CALL / VARIANT / LIT: the arguments written */
+    struct Inst *inst; /* a generic declaration: its instances; an instance: the record of how it was made */
     uint64_t ival;
     Type *type;  /* resolved type */
     Node *decl;  /* resolved callee / field */
 };
 
+/* How a generic declaration was instantiated: one record per distinct set of arguments. */
+typedef struct Inst {
+    Node *origin;     /* the generic declaration */
+    Node *decl;       /* the instance made from it */
+    int n;            /* number of generic parameters */
+    Type **types;     /* per parameter: the type argument (NULL for a const parameter) */
+    uint64_t *vals;   /* per parameter: the value of a const argument */
+    Type **ctypes;    /* per parameter: the type of a const parameter (NULL for a type parameter) */
+    int id;           /* 1, 2, 3, ...: tells the instances apart in the emitted C */
+    int line;         /* where it was first asked for */
+    const char *name; /* for messages: Pair<i32, bool> */
+    struct Inst *next;
+} Inst;
+
 Node *parse_program(Token *toks); /* list of N_FN / N_STRUCT */
-void check_program(Node *prog);
+Node *check_program(Node *prog); /* returns the list without the generic declarations, plus every instance */
 void flow_program(Node *prog); /* init / move / exclusivity checks */
 
 #endif

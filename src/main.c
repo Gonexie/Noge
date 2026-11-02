@@ -41,7 +41,7 @@ int main(int argc, char **argv) {
     g_file = in;
     char *src = read_file(in);
     Node *prog = parse_program(lex(src));
-    check_program(prog);
+    prog = check_program(prog);
     flow_program(prog);
     IrFunc *ir = lower_program(prog);
 

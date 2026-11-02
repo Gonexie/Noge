@@ -84,6 +84,12 @@ static void put_addr(const IrPlace *p) {
     fputc(')', out);
 }
 
+/* the C name of a function: f_name, x_name for one defined in C, or f<id>_name for an instance of a generic one */
+static void put_fn_ident(Node *fn) {
+    if (fn->inst) fprintf(out, "f%d_%.*s", fn->inst->id, SF(fn->name));
+    else fprintf(out, "%c_%.*s", fn->ext == EXT_EXTERN ? 'x' : 'f', SF(fn->name));
+}
+
 static void put_zero(Type *t) { fputs(is_aggregate(t) ? "{0}" : "0", out); }
 
 static void put_min(Type *t) {
@@ -494,7 +500,8 @@ static void emit_instr(Instr *i, int d) {
     case I_CALL:
         if (i->dst) put_def(i, d);
         else ind(d);
-        fprintf(out, "%c_%.*s(", i->callee->ext == EXT_EXTERN ? 'x' : 'f', SF(i->callee->name));
+        put_fn_ident(i->callee);
+        fputc('(', out);
         for (int k = 0; k < i->nargs; k++) {
             if (k) fputs(", ", out);
             if (!i->args[k].addr) {
@@ -640,7 +647,9 @@ static void emit_extern_proto(Node *fn) {
 }
 
 static void emit_sig(IrFunc *f) {
-    fprintf(out, "%s f_%.*s(", f->ret->cname, SF(f->decl->name));
+    fprintf(out, "%s ", f->ret->cname);
+    put_fn_ident(f->decl);
+    fputc('(', out);
     if (!f->nparams) fputs("void", out);
     for (int k = 0; k < f->nparams; k++) {
         IrVar *p = f->params[k];
