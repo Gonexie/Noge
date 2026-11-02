@@ -12,6 +12,7 @@
 #
 # ok/, trap/ and ffi/ run twice: with __builtin_*_overflow, and with --no-builtins (portable C99 checks).
 # If clang is installed, ok/ and trap/ are also compiled with it as a second opinion.
+# The one-step runner (noge) is checked too: output, exit status and clean-up.
 NOGEC=${1:-build/nogec}
 CC=${CC:-cc}
 tmp=$(mktemp -d)
@@ -87,6 +88,31 @@ for f in tests/free/*.nge; do
         pass=$((pass + 1))
     fi
 done
+
+# The one-step runner, ./noge: the right output, the program's own exit status, and no temporary files left.
+rt="$tmp/runner-tmp"
+mkdir -p "$rt"
+runner_check() { # runner_check <name> <wanted status> <wanted stdout> <text wanted on stderr, or empty> <args...>
+    name=$1; want_code=$2; want_out=$3; want_err=$4
+    shift 4
+    got_out=$(TMPDIR="$rt" NOGEC="$NOGEC" sh noge "$@" 2>"$tmp/rerr")
+    got_code=$?
+    if [ "$got_code" = "$want_code" ] && [ "$got_out" = "$want_out" ] && { [ -z "$want_err" ] || grep -qF -- "$want_err" "$tmp/rerr"; }; then
+        pass=$((pass + 1))
+    else
+        failed "noge ($name): status $got_code (wanted $want_code), output [$got_out]" "$tmp/rerr"
+    fi
+}
+runner_check "gcc" 0 42 "" --gcc tests/ok/hello.nge
+if command -v tcc >/dev/null 2>&1; then runner_check "tcc" 0 42 "" tests/ok/hello.nge; fi
+runner_check "run-time check" 101 1 ":5: runtime error: integer overflow" tests/trap/add_i32.nge
+runner_check "compile error" 1 "" "use of moved value" tests/err/move_then_use.nge
+runner_check "missing file" 2 "" "no such file" tests/ok/nope.nge
+if [ "$(ls -d "$rt"/noge.* 2>/dev/null | wc -l)" -eq 0 ]; then
+    pass=$((pass + 1))
+else
+    failed "noge left temporary folders behind: $(ls "$rt")"
+fi
 
 # A second opinion: where clang is installed, the emitted C must be warning-free there too (compile only).
 if command -v clang >/dev/null 2>&1; then

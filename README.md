@@ -9,9 +9,21 @@ make test         # host tests, then the Cortex-M tests under QEMU if the ARM to
 make check-arith  # slower: the overflow/division/shift code and the constant folder, against __int128
 make -C examples/cortex-m test   # just the firmware (see examples/cortex-m/README.md)
 
-build/nogec -o out.c prog.nge && cc -o out out.c && ./out
+./noge prog.nge                    # compile and run in one step (builds the compiler the first time)
+./noge -O prog.nge                 # the same with gcc -O2: slower to build, faster to run
+
+build/nogec -o out.c prog.nge && cc -o out out.c && ./out      # the same thing, by hand
 build/nogec --target=cortex-m -o fw.c fw.nge      # for a microcontroller: no C library, 32-bit pointers
 ```
+
+## Running a program: `./noge`
+
+`./noge my/hello.nge` builds the compiler if it is not built yet, compiles the program and runs it, then deletes
+the temporary files. The program's exit status is passed through (a failed run-time check gives 101); a program
+that does not compile gives status 1. If `tcc` is installed it is used for the C, which is far faster than gcc
+(the generated C for a 68,000-line program: 0.18 s against 19.8 s); `--gcc` forces gcc, `-O` uses `gcc -O2`, and
+`--emit-c` prints the generated C instead of running anything. It handles one-file programs; a program that calls
+your own C files needs the three steps by hand (`nogec`, a C compiler with all the files, run).
 
 ## The language so far
 

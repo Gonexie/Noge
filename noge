@@ -1,0 +1,135 @@
+#!/bin/sh
+# noge - compile and run a Noge program in one step.
+#
+#   ./noge my/hello.nge          build the program and run it
+#   ./noge -O my/hello.nge       same, but optimised (gcc -O2): slower to build, faster to run
+#   ./noge --gcc my/hello.nge    use gcc even when tcc is installed
+#   ./noge --emit-c my/hello.nge print the C that Noge writes, and do not run anything
+#
+# The first time, it builds the Noge compiler (needs make and gcc). If tcc is installed it is used
+# for the C: it is far faster than gcc, which is what you want while experimenting. Nothing is left
+# behind: the C file and the program live in a temporary folder that is deleted afterwards.
+# The exit status is the program's own (so a failed run-time check gives 101), or 1 if your
+# program did not compile, or 2 if noge itself could not do its job.
+#
+# This is for programs in a single file. A program that calls your own C files needs the
+# three steps done by hand: nogec, then gcc with all the files, then run.
+
+usage() {
+    cat <<'EOF'
+usage: ./noge [options] program.nge
+
+Compiles a Noge program and runs it.
+
+  -O          optimise (gcc -O2): slower to build, faster to run
+  --gcc       use gcc even if tcc is installed
+  --emit-c    print the generated C instead of running the program
+  -h, --help  show this text
+
+Examples:   ./noge my/hello.nge
+            ./noge -O my/big_calculation.nge
+EOF
+}
+
+opt=0
+force_gcc=0
+emit=0
+file=
+while [ $# -gt 0 ]; do
+    case "$1" in
+    -O) opt=1 ;;
+    --gcc) force_gcc=1 ;;
+    --emit-c) emit=1 ;;
+    -h | --help)
+        usage
+        exit 0
+        ;;
+    -*)
+        echo "noge: unknown option '$1' (try --help)" >&2
+        exit 2
+        ;;
+    *)
+        if [ -n "$file" ]; then
+            echo "noge: one program at a time, please" >&2
+            exit 2
+        fi
+        file=$1
+        ;;
+    esac
+    shift
+done
+
+if [ -z "$file" ]; then
+    usage >&2
+    exit 2
+fi
+if [ ! -f "$file" ]; then
+    echo "noge: no such file: $file" >&2
+    exit 2
+fi
+
+# Find the Noge folder: the one this script is in (following a symbolic link, if it was run through one).
+self=$0
+if command -v readlink >/dev/null 2>&1; then
+    self=$(readlink -f "$0" 2>/dev/null || echo "$0")
+fi
+root=$(cd "$(dirname "$self")" && pwd)
+
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/noge.XXXXXX") || {
+    echo "noge: cannot create a temporary folder" >&2
+    exit 2
+}
+cleanup() {
+    if [ -n "$tmp" ] && [ -d "$tmp" ]; then
+        rm -rf "$tmp"
+    fi
+}
+trap cleanup EXIT HUP INT TERM
+
+# The compiler. NOGEC can point at a different build (the tests do that); otherwise make sure
+# build/nogec exists and is up to date (make does nothing when it already is).
+if [ -n "$NOGEC" ]; then
+    nogec=$NOGEC
+else
+    nogec=$root/build/nogec
+    [ -x "$nogec" ] || echo "noge: building the Noge compiler (first time only)..." >&2
+    if ! make -s -C "$root" build/nogec >"$tmp/make.log" 2>&1; then
+        echo "noge: could not build the Noge compiler. These are the messages:" >&2
+        cat "$tmp/make.log" >&2
+        echo "noge: make and gcc must be installed (sudo apt install build-essential)" >&2
+        exit 2
+    fi
+fi
+
+if [ "$emit" = 1 ]; then
+    "$nogec" -o "$tmp/prog.c" "$file" || exit 1
+    cat "$tmp/prog.c"
+    exit 0
+fi
+
+cc=${CC:-cc}
+
+# Fast path: tcc. It lacks gcc's overflow functions, so Noge writes plain C checks instead
+# (--no-builtins); the program behaves the same. If tcc cannot build it, fall through to gcc.
+if [ "$force_gcc" = 0 ] && [ "$opt" = 0 ] && command -v tcc >/dev/null 2>&1; then
+    "$nogec" --no-builtins -o "$tmp/prog.c" "$file" || exit 1
+    if tcc -o "$tmp/prog" "$tmp/prog.c" 2>"$tmp/cc.log"; then
+        "$tmp/prog"
+        exit $?
+    fi
+    echo "noge: tcc could not build this program; using $cc instead" >&2
+fi
+
+"$nogec" -o "$tmp/prog.c" "$file" || exit 1
+flags=
+if [ "$opt" = 1 ]; then
+    flags=-O2
+fi
+# shellcheck disable=SC2086
+if ! $cc $flags -o "$tmp/prog" "$tmp/prog.c" 2>"$tmp/cc.log"; then
+    echo "noge: the C compiler could not build the program. That is a bug in Noge; please send me this:" >&2
+    cat "$tmp/cc.log" >&2
+    exit 2
+fi
+"$tmp/prog"
+exit $?
