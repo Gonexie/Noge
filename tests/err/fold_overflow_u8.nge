@@ -1,0 +1,2 @@
+// error: constant expression overflows 'u8'
+fn main() -> i32 { let x: u8 = 200 + 100; return 0; }

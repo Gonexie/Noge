@@ -1,0 +1,4 @@
+// error: cannot be called here: the value must be known at compile time
+fn f() -> i32 { return 1; }
+const X: i32 = f();
+fn main() -> i32 { return 0; }

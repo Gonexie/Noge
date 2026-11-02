@@ -1,0 +1,2 @@
+// error: 'ptr_write' needs a '*mut' pointer, found '*const u32'
+fn main() -> i32 { let p = 4096 as *const u32; unsafe { ptr_write(p, 1); } return 0; }

@@ -1,0 +1,2 @@
+// error: unterminated string literal
+fn main() -> i32 { let s = c"hello; return 0; }

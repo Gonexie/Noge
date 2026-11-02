@@ -1,0 +1,3 @@
+// error: cannot cast 'P' to '*mut u32'
+struct P { a: i32 }
+fn main() -> i32 { let p = P { a: 1 }; let a = p as *mut u32; return 0; }

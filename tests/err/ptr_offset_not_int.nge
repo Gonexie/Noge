@@ -1,0 +1,2 @@
+// error: a pointer offset must be an integer
+fn main() -> i32 { let p = 4096 as *mut u32; unsafe { let q = ptr_offset(p, true); } return 0; }

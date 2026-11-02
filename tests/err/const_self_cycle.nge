@@ -1,0 +1,3 @@
+// error: constant 'A' is defined in terms of itself
+const A: i32 = A;
+fn main() -> i32 { return 0; }

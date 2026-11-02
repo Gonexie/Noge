@@ -44,8 +44,7 @@ char *read_file(const char *path);
     X(T_FN, "'fn'") X(T_STRUCT, "'struct'") X(T_LET, "'let'")                  \
     X(T_VAR, "'var'") X(T_IF, "'if'") X(T_ELSE, "'else'")                      \
     X(T_WHILE, "'while'") X(T_RETURN, "'return'") X(T_AS, "'as'")              \
-    X(T_TRUE, "'true'") X(T_FALSE, "'false'") X(T_INOUT, "'inout'")            \
-    X(T_SINK, "'sink'") X(T_SET, "'set'") X(T_COPY, "'copy'")       \
+    X(T_TRUE, "'true'") X(T_FALSE, "'false'")                                  \
     X(T_LPAREN, "'('") X(T_RPAREN, "')'")                  \
     X(T_LBRACE, "'{'") X(T_RBRACE, "'}'") X(T_COMMA, "','")                    \
     X(T_COLON, "':'") X(T_SEMI, "';'") X(T_DOT, "'.'") X(T_ARROW, "'->'")      \
@@ -55,7 +54,9 @@ char *read_file(const char *path);
     X(T_PERCENT, "'%'") X(T_ANDAND, "'&&'") X(T_OROR, "'||'")                  \
     X(T_BANG, "'!'") X(T_AMP, "'&'") X(T_PIPE, "'|'") X(T_CARET, "'^'")      \
     X(T_TILDE, "'~'") X(T_SHL, "'<<'") X(T_SHR, "'>>'")                     \
-    X(T_LBRACKET, "'['") X(T_RBRACKET, "']'")
+    X(T_LBRACKET, "'['") X(T_RBRACKET, "']'") X(T_STR, "string")           \
+    X(T_CSTR, "C string") X(T_UNSAFE, "'unsafe'") X(T_EXTERN, "'extern'")       \
+    X(T_EXPORT, "'export'") X(T_CONST, "'const'") X(T_MUT, "'mut'")
 
 typedef enum {
 #define X(k, s) k,
@@ -73,6 +74,7 @@ typedef struct {
     Str text;
     int line;
     uint64_t ival;
+    Str str; /* T_STR / T_CSTR: the bytes after escapes are processed */
 } Token;
 
 const char *tok_name(TokKind k);
@@ -80,7 +82,7 @@ Token *lex(const char *src); /* array terminated by several T_EOF tokens */
 
 /* ---- types ---- */
 typedef struct Node Node;
-typedef enum { TY_UNIT, TY_BOOL, TY_INT, TY_STRUCT, TY_ARRAY } TyKind;
+typedef enum { TY_UNIT, TY_BOOL, TY_INT, TY_STRUCT, TY_ARRAY, TY_PTR } TyKind;
 typedef struct Type {
     TyKind kind;
     const char *name;
@@ -93,10 +95,16 @@ typedef struct Type {
     struct Type *elem; /* array element type */
     uint64_t len;      /* array length */
     struct Type *next_array; /* all array types, in creation order */
+    bool is_mut;             /* pointer: *mut rather than *const (elem is the pointee) */
+    struct Type *next_ptr;   /* all pointer types, in creation order */
     unsigned char mark;      /* emitter: type definition already printed */
 } Type;
 
 extern Type *g_array_types; /* head of the list of array types */
+extern Type *g_ptr_types;   /* head of the list of pointer types */
+extern Type *ty_usize, *ty_isize;
+extern bool g_freestanding; /* no hosted C library: no stdio, no print */
+extern int g_ptr_bits;      /* width of usize / isize / pointers on the target */
 static inline bool is_aggregate(const Type *t) { return t->kind == TY_STRUCT || t->kind == TY_ARRAY; }
 
 extern Type *ty_unit, *ty_bool, *ty_i32;
@@ -105,14 +113,20 @@ extern Type *ty_unit, *ty_bool, *ty_i32;
 typedef enum {
     /* expressions */
     N_INT, N_BOOL, N_NAME, N_BIN, N_UN, N_ADDR, N_CALL, N_MEMBER, N_LIT,
-    N_INITF, N_CAST, N_INDEX, N_ARRAY, N_REPEAT,
+    N_INITF, N_CAST, N_INDEX, N_ARRAY, N_REPEAT, N_CSTR, N_PTROP,
     /* statements */
     N_LET, N_ASSIGN, N_EXPR, N_IF, N_WHILE, N_RETURN, N_BLOCK,
     /* declarations */
-    N_FN, N_PARAM, N_STRUCT, N_FDECL, N_TYPE
+    N_FN, N_PARAM, N_STRUCT, N_FDECL, N_TYPE, N_CONST
 } NodeKind;
 
 typedef enum { M_LET, M_INOUT, M_SINK, M_SET } ParamMode;
+
+/* raw-pointer operations (N_PTROP); all of them need an unsafe block */
+enum { PO_READ, PO_WRITE, PO_VREAD, PO_VWRITE, PO_OFFSET };
+
+/* N_FN: how the function relates to C */
+enum { EXT_NONE, EXT_EXTERN, EXT_EXPORT };
 
 struct Node {
     NodeKind kind;
@@ -129,6 +143,7 @@ struct Node {
     int leaf_off;  /* FDECL: first scalar leaf of this field inside its struct */
     int nlocals;   /* FN: number of local ids used (params included) */
     int end_line;  /* BLOCK: line of the closing brace */
+    int ext;       /* FN: EXT_NONE, EXT_EXTERN (declared in C) or EXT_EXPORT (named for C) */
     uint64_t ival;
     Type *type;  /* resolved type */
     Node *decl;  /* resolved callee / field */

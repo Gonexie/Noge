@@ -1,0 +1,2 @@
+// error: 'ptr_offset' requires an unsafe block
+fn main() -> i32 { let p = 4096 as *mut u32; let q = ptr_offset(p, 1); return 0; }

@@ -1,0 +1,46 @@
+copy struct Pt { x: i32, y: i32 }          // same layout as C's struct pt
+
+extern "C" fn c_double(v: i32) -> i32;
+extern "C" fn c_call_back(v: i32) -> i32;
+extern "C" fn c_call_back_ptr() -> i32;
+extern "C" fn c_fill(buf: inout [u8; 8], n: i32);       // arrays are passed as a pointer to the first element
+extern "C" fn c_sum(buf: [u8; 8], n: i32) -> i32;       // let: const uint8_t *
+extern "C" fn c_get_pair(a: set i32, b: set i32);       // set: int32_t *, initialized by C
+extern "C" fn c_move(p: inout Pt, dx: i32, dy: i32);
+extern "C" fn c_dist(p: Pt) -> i32;                     // let struct: const struct pt *
+extern "C" fn c_make_pt(x: i32, y: i32) -> Pt;          // structs can be returned by value
+extern "C" fn c_flip(p: sink Pt) -> Pt;                 // ... and passed by value
+extern "C" fn c_is_even(v: i32) -> bool;
+extern "C" fn c_message() -> *const u8;
+extern "C" fn puts(s: *const u8) -> i32;
+
+export "C" fn noge_triple(v: i32) -> i32 { return v * 3; }
+
+export "C" fn noge_bump(p: inout i32) { p = p + 1; }
+
+fn main() -> i32 {
+    var buf: [u8; 8] = [0; 8];
+    var a: i32;
+    var b: i32;
+    var p = Pt { x: 1, y: 2 };
+    print(noge_triple(7));                  // exported functions are ordinary functions to Noge: 21
+    unsafe {
+        print(c_double(21));                // 42
+        print(c_call_back(5));              // C calls noge_triple(5), adds 1: 16
+        print(c_call_back_ptr());           // C calls noge_bump twice: 42
+        c_fill(&buf, 8);
+        print(c_sum(buf, 8));               // 0+3+6+9+12+15+18+21 = 84
+        c_get_pair(&a, &b);
+        print(a * 100 + b);                 // 1122
+        c_move(&p, 10, 20);
+        print(c_dist(p));                   // 11*11 + 22*22 = 605
+        let q = c_make_pt(3, 4);
+        print(q.x * 10 + q.y);              // 34
+        let f = c_flip(q);
+        print(f.x * 10 + f.y);              // 43
+        if c_is_even(10) { print(1); }
+        if !c_is_even(7) { print(2); }
+        puts(c_message());
+    }
+    return 0;
+}

@@ -1,0 +1,69 @@
+// Blinks the LED on PC13 (the STM32F103 "Blue Pill"; active low) by writing the peripheral registers
+// directly. The STM32F100 on the VL Discovery board, which QEMU emulates, has the same register layout.
+//
+// The raw memory accesses live in two small functions, reg_read and reg_write. Everything else is
+// ordinary safe code.
+
+// Register addresses, from the STM32F10x reference manual (RM0008)
+const RCC_APB2ENR: usize = 0x4002_1018;   // peripheral clock enable, APB2
+const GPIOC_CRH: usize = 0x4001_1004;     // port C configuration, pins 8..15
+const GPIOC_BSRR: usize = 0x4001_1010;    // port C bit set/reset
+const SYST_CSR: usize = 0xE000_E010;      // SysTick control and status
+const SYST_RVR: usize = 0xE000_E014;      // SysTick reload value
+const SYST_CVR: usize = 0xE000_E018;      // SysTick current value
+
+const IOPCEN: u32 = 1 << 4;               // RCC_APB2ENR: port C clock
+const COUNTFLAG: u32 = 1 << 16;           // SYST_CSR: set when the counter wrapped
+const LED_PIN: u32 = 13;
+const CPU_HZ: u32 = 8_000_000;            // the internal oscillator, after reset
+const HALF_PERIOD_MS: u32 = 250;
+
+extern "C" fn board_tick();               // called once per half period
+
+fn reg_write(addr: usize, value: u32) {
+    unsafe { volatile_write(addr as *mut u32, value); }
+}
+
+fn reg_read(addr: usize) -> u32 {
+    unsafe { return volatile_read(addr as *const u32); }
+}
+
+fn reg_modify(addr: usize, clear: u32, set: u32) {
+    reg_write(addr, (reg_read(addr) & ~clear) | set);
+}
+
+// Waits with the SysTick timer: it wraps once per millisecond.
+fn delay_ms(ms: u32) {
+    reg_write(SYST_RVR, CPU_HZ / 1000 - 1);
+    reg_write(SYST_CVR, 0);
+    reg_write(SYST_CSR, 0b101);           // enabled, running from the CPU clock
+    var left = ms;
+    while left > 0 {
+        while reg_read(SYST_CSR) & COUNTFLAG == 0 { }   // reading CSR clears the flag
+        left = left - 1;
+    }
+    reg_write(SYST_CSR, 0);
+}
+
+fn led_set(on: bool) {
+    if on {
+        reg_write(GPIOC_BSRR, 1 << (LED_PIN + 16));     // reset the pin: the LED lights
+    } else {
+        reg_write(GPIOC_BSRR, 1 << LED_PIN);
+    }
+}
+
+fn main() -> i32 {
+    reg_modify(RCC_APB2ENR, 0, IOPCEN);
+    // CRH holds four configuration bits per pin; 0b0010 is "output, 2 MHz, push-pull"
+    reg_modify(GPIOC_CRH, 0xF << ((LED_PIN - 8) * 4), 0b0010 << ((LED_PIN - 8) * 4));
+
+    var on = false;
+    while true {
+        on = !on;
+        led_set(on);
+        delay_ms(HALF_PERIOD_MS);
+        unsafe { board_tick(); }
+    }
+    return 0;
+}

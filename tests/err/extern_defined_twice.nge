@@ -1,0 +1,4 @@
+// error: 'f' is defined twice
+extern "C" fn f();
+fn f() { }
+fn main() -> i32 { return 0; }

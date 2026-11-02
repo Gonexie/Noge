@@ -1,0 +1,3 @@
+// error: expected ';'
+extern "C" fn f() { }
+fn main() -> i32 { return 0; }

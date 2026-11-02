@@ -1,0 +1,3 @@
+// error: needs a hosted C library
+// flags: --freestanding
+fn main() -> i32 { print(1); return 0; }

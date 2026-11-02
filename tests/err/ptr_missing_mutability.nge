@@ -1,0 +1,2 @@
+// error: expected 'mut' or 'const' after '*'
+fn main() -> i32 { let p: *u32 = 0 as *mut u32; return 0; }

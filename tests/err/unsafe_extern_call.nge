@@ -1,0 +1,4 @@
+// error: calling the extern function 'c_get' requires an unsafe block
+extern "C" fn c_get(p: *const u8) -> i32;
+extern "C" fn c_put(p: *mut u32, v: u32);
+fn main() -> i32 { let x = c_get(c"a"); return 0; }

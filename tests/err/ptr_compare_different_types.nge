@@ -1,0 +1,2 @@
+// error: type mismatch: expected '*mut u32', found '*mut u8'
+fn main() -> i32 { let a = 4096 as *mut u32; let b = 4096 as *mut u8; let c = a == b; return 0; }

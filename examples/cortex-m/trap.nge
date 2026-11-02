@@ -1,0 +1,15 @@
+// A failed run-time check on the device: the weak noge_trap_hook is replaced by board_qemu.c, which reports
+// the kind of failure and the source line, then exits with status 99.
+extern "C" fn semihost_puts(s: *const u8);
+
+fn pick(a: [u32; 4], i: u32) -> u32 {
+    return a[i];
+}
+
+fn main() -> i32 {
+    let a: [u32; 4] = [10, 20, 30, 40];
+    unsafe { semihost_puts(c"before the trap\n"); }
+    let x = pick(a, 4);
+    unsafe { semihost_puts(c"never printed\n"); }
+    return x as i32;
+}

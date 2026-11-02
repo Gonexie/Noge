@@ -1,0 +1,11 @@
+// The smallest program: a C string literal handed to a C function (semihosting, in board_qemu.c).
+extern "C" fn semihost_puts(s: *const u8);
+extern "C" fn semihost_exit(code: i32);
+
+fn main() -> i32 {
+    unsafe {
+        semihost_puts(c"Hello from Noge on a Cortex-M3\n");
+        semihost_exit(0);
+    }
+    return 0;
+}

@@ -1,0 +1,4 @@
+// error: 'A' is defined twice
+const A: i32 = 1;
+const A: i32 = 2;
+fn main() -> i32 { return 0; }

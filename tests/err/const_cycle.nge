@@ -1,0 +1,4 @@
+// error: defined in terms of itself
+const A: i32 = B + 1;
+const B: i32 = A + 1;
+fn main() -> i32 { return 0; }

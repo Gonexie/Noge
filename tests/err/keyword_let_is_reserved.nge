@@ -1,0 +1,2 @@
+// error: expected identifier, found 'let'
+fn main() -> i32 { let let = 1; return 0; }

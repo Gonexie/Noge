@@ -1,0 +1,28 @@
+extern "C" fn strlen(s: *const u8) -> usize;
+extern "C" fn abs(x: i32) -> i32;
+extern "C" fn toupper(c: i32) -> i32;
+extern "C" fn puts(s: *const u8) -> i32;
+extern "C" fn memset(dst: inout [u8; 8], c: i32, n: usize) -> *mut u8;
+extern "C" fn memcmp(a: [u8; 4], b: [u8; 4], n: usize) -> i32;
+
+fn main() -> i32 {
+    var buf: [u8; 8] = [0; 8];
+    unsafe {
+        print(strlen(c"hello") as i32);            // 5
+        print(strlen(c"tab\there\n") as i32);      // escapes: 9
+        print(strlen(c"a\0b") as i32);             // C sees the first NUL: 1
+        print(abs(-42));                           // 42
+        print(toupper(97));
+        puts(c"from the C library");
+        puts(c"quote \" backslash \\ question ?? done");
+        memset(&buf, 65, 3);
+    }
+    print(buf[0] as i32 + buf[3] as i32);          // 65
+    let x: [u8; 4] = [1, 2, 3, 4];
+    let y: [u8; 4] = [1, 2, 3, 5];
+    unsafe {
+        print((memcmp(x, y, 3) == 0) as i32);      // first three bytes equal: 1
+        print((memcmp(x, y, 4) < 0) as i32);       // 1
+    }
+    return 0;
+}

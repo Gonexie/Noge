@@ -381,7 +381,11 @@ static void expr(Node *n, bool consume) {
     case N_REPEAT:
         expr(n->a, true);
         break;
-    default:
+    case N_PTROP: /* raw pointers are plain values; what they point at is not tracked */
+        expr(n->a, true);
+        if (n->b) expr(n->b, true);
+        break;
+    default: /* literals, C strings */
         break;
     }
 }
@@ -488,5 +492,5 @@ static void flow_fn(Node *fn) {
 
 void flow_program(Node *prog) {
     for (Node *d = prog; d; d = d->next)
-        if (d->kind == N_FN) flow_fn(d);
+        if (d->kind == N_FN && d->ext != EXT_EXTERN) flow_fn(d);
 }

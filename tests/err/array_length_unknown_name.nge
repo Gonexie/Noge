@@ -1,0 +1,2 @@
+// error: unknown name 'NOPE'
+fn main() -> i32 { var a: [u8; NOPE]; return 0; }

@@ -1,0 +1,3 @@
+// error: 'print' is a builtin function
+extern "C" fn print(x: i32);
+fn main() -> i32 { return 0; }

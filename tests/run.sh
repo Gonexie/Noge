@@ -5,9 +5,12 @@
 #   trap/*.nge  compile and build, then die with a runtime check: exit status 101 and a stderr line
 #               "<file>:LINE: runtime error: MESSAGE". Line 1 is "// trap: LINE: MESSAGE"; trap/*.out
 #               is what stdout held up to that point.
-#   err/*.nge   must be rejected by nogec; line 1 is "// error: <text the message must contain>"
+#   err/*.nge   must be rejected by nogec; line 1 is "// error: <text the message must contain>", and an
+#               optional line 2 "// flags: <nogec options>"
+#   ffi/*.nge   like ok/, linked with ffi/<name>.c (C code the program calls, and that calls it back)
+#   free/*.nge  built with --freestanding as a -ffreestanding object that must not need stdio or exit
 #
-# ok/ and trap/ run twice: with __builtin_*_overflow, and with --no-builtins (portable C99 checks).
+# ok/, trap/ and ffi/ run twice: with __builtin_*_overflow, and with --no-builtins (portable C99 checks).
 NOGEC=${1:-build/nogec}
 CC=${CC:-cc}
 tmp=$(mktemp -d)
@@ -55,12 +58,40 @@ for mode in "" "--no-builtins"; do
             pass=$((pass + 1))
         fi
     done
+
+    for f in tests/ffi/*.nge; do
+        [ -e "$f" ] || continue
+        b=$(basename "$f" .nge)
+        "$NOGEC" $mode -o "$tmp/$b.c" "$f" 2>"$tmp/err" || { failed "$f [$mode]: nogec rejected it" "$tmp/err"; continue; }
+        if ! $CC -std=c99 -Wall -Wextra -Wpedantic -Werror -o "$tmp/$b" "$tmp/$b.c" "${f%.nge}.c" 2>"$tmp/err"; then
+            failed "$f [$mode]: does not build with its C support file" "$tmp/err"
+            continue
+        fi
+        "$tmp/$b" >"$tmp/$b.out" 2>"$tmp/$b.stderr"
+        if diff -u "${f%.nge}.out" "$tmp/$b.out" >"$tmp/diff"; then pass=$((pass + 1)); else failed "$f [$mode]: wrong output" "$tmp/diff"; fi
+    done
+done
+
+for f in tests/free/*.nge; do
+    [ -e "$f" ] || continue
+    b=$(basename "$f" .nge)
+    "$NOGEC" --freestanding -o "$tmp/$b.c" "$f" 2>"$tmp/err" || { failed "$f: nogec rejected it" "$tmp/err"; continue; }
+    if ! $CC -std=c99 -ffreestanding -O2 -Wall -Wextra -Wpedantic -Werror -c -o "$tmp/$b.o" "$tmp/$b.c" 2>"$tmp/err"; then
+        failed "$f: freestanding C does not compile cleanly" "$tmp/err"
+        continue
+    fi
+    if nm -u "$tmp/$b.o" | grep -E 'printf|puts|exit|abort|fflush|stdout|stderr|malloc|free' >"$tmp/diff"; then
+        failed "$f: the freestanding object needs the C library" "$tmp/diff"
+    else
+        pass=$((pass + 1))
+    fi
 done
 
 for f in tests/err/*.nge; do
     [ -e "$f" ] || continue
     want=$(sed -n '1s|^// error: ||p' "$f")
-    if "$NOGEC" -o /dev/null "$f" 2>"$tmp/err"; then
+    flags=$(sed -n '2s|^// flags: ||p' "$f")
+    if "$NOGEC" $flags -o /dev/null "$f" 2>"$tmp/err"; then
         failed "$f: compiled, but should have been rejected"
     elif grep -qF -- "$want" "$tmp/err"; then
         pass=$((pass + 1))

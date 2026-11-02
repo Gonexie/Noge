@@ -67,6 +67,8 @@ static bool has_call(Node *n) {
     case N_BIN:
     case N_INDEX:
         return has_call(n->a) || has_call(n->b);
+    case N_PTROP:
+        return has_call(n->a) || has_call(n->b);
     case N_UN:
     case N_CAST:
     case N_MEMBER:
@@ -334,6 +336,35 @@ static Operand lower_expr(Node *n) {
     }
     case N_CALL:
         return lower_call(n);
+    case N_CSTR: {
+        IrVar *t = new_temp(n->type);
+        Instr *i = emit(I_STR, n->line);
+        i->dst = t;
+        i->fresh = true;
+        i->str = n->name;
+        return op_var(t);
+    }
+    case N_PTROP: {
+        Operand p = lower_expr(n->a);
+        if (n->b && has_call(n->b)) p = snap(p);
+        Operand v = n->b ? lower_expr(n->b) : (Operand){0};
+        if (n->op == PO_WRITE || n->op == PO_VWRITE) {
+            Instr *i = emit(I_PWRITE, n->line);
+            i->vol = n->op == PO_VWRITE;
+            i->a = p;
+            i->b = v;
+            i->type = n->b->type;
+            return op_unit();
+        }
+        IrVar *t = new_temp(n->type);
+        Instr *i = emit(n->op == PO_OFFSET ? I_POFFSET : I_PREAD, n->line);
+        i->vol = n->op == PO_VREAD;
+        i->a = p;
+        i->b = v;
+        i->dst = t;
+        i->fresh = true;
+        return op_var(t);
+    }
     case N_LIT:
         return lower_struct_lit(n);
     case N_ARRAY:
@@ -472,7 +503,7 @@ static IrFunc *lower_fn(Node *fn) {
 IrFunc *lower_program(Node *prog) {
     IrFunc *head = NULL, **tail = &head;
     for (Node *d = prog; d; d = d->next) {
-        if (d->kind != N_FN) continue;
+        if (d->kind != N_FN || d->ext == EXT_EXTERN) continue; /* extern functions live in C */
         *tail = lower_fn(d);
         tail = &(*tail)->next;
     }

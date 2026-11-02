@@ -59,6 +59,10 @@ typedef enum {
     I_FILL,     /* dst = array with every element equal to a */
     I_CALL,     /* [dst =] callee(args) */
     I_USE,      /* (void)a: a computed value that is deliberately dropped */
+    I_STR,      /* dst = pointer to the NUL-terminated bytes in str */
+    I_PREAD,    /* dst = *a   (vol: volatile) */
+    I_PWRITE,   /* *a = b     (vol: volatile) */
+    I_POFFSET,  /* dst = a + b elements */
     I_IF,       /* if (a) then else els */
     I_WHILE,    /* loop: cond block, leave unless a, body */
     I_RETURN,   /* return [a] */
@@ -76,6 +80,8 @@ struct Instr {
     int bop;        /* I_BIN / I_UN: a token kind or an OP_* pseudo operator */
     bool has_init;  /* I_DECL */
     bool fresh;     /* this instruction declares dst */
+    bool vol;       /* I_PREAD / I_PWRITE: volatile access */
+    Str str;        /* I_STR */
     IrVar *dst;
     Operand a, b;
     Type *type;     /* I_BIN / I_UN: type of the operands */
@@ -102,7 +108,8 @@ struct IrFunc {
 };
 
 typedef struct {
-    bool portable; /* do not rely on __builtin_*_overflow */
+    bool portable;     /* do not rely on __builtin_*_overflow */
+    bool freestanding; /* no hosted C library: no stdio, no print, a link-time trap hook */
 } EmitOpts;
 
 IrFunc *lower_program(Node *prog);

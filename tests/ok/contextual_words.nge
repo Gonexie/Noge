@@ -1,0 +1,16 @@
+// inout, sink, set and copy are keywords only in front of a parameter's type (and `copy` before `struct`).
+// Everywhere else they are ordinary names.
+fn modify(addr: u32, clear: u32, set: u32) -> u32 { return (addr & ~clear) | set; }
+
+fn swap_in(inout: i32, sink: i32) -> i32 { return inout * 10 + sink; }
+
+fn bump(copy: inout i32, set: i32) { copy = copy + set; }
+
+fn main() -> i32 {
+    print(modify(0xFF, 0x0F, 0x300) as i32);   // 0x3F0 = 1008
+    print(swap_in(4, 2));                      // 42
+    var copy = 1;
+    bump(&copy, 5);
+    print(copy);                               // 6
+    return 0;
+}

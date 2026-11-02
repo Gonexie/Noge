@@ -1,0 +1,2 @@
+// error: 'main' must be declared as 'fn main() -> i32'
+export "C" fn main() -> i32 { return 0; }

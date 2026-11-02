@@ -1,30 +1,42 @@
-/* Name resolution and type checking. Stops at the first error. */
+/* Name resolution and type checking. Stops at the first error.
+ *
+ * Besides checking, this pass rewrites the tree in a few places so that later passes see simpler nodes:
+ * intrinsic calls become operators or N_PTROP nodes, `len(a)` and named constants become literals, and any
+ * expression made only of literals is folded to one literal (with overflow reported at compile time). */
 #include "noge.h"
 
+#define PRIM(k, nm, b, sg, cn, nl) \
+    {.kind = (k), .name = (nm), .bits = (b), .is_signed = (sg), .cname = (cn), .is_copy = true, .nleaves = (nl)}
 static Type prims[] = {
-    {TY_UNIT, "unit", 0, false, NULL, "void", true, 0, NULL, 0, NULL, 0},
-    {TY_BOOL, "bool", 1, false, NULL, "bool", true, 1, NULL, 0, NULL, 0},
-    {TY_INT, "i8", 8, true, NULL, "int8_t", true, 1, NULL, 0, NULL, 0},
-    {TY_INT, "i16", 16, true, NULL, "int16_t", true, 1, NULL, 0, NULL, 0},
-    {TY_INT, "i32", 32, true, NULL, "int32_t", true, 1, NULL, 0, NULL, 0},
-    {TY_INT, "i64", 64, true, NULL, "int64_t", true, 1, NULL, 0, NULL, 0},
-    {TY_INT, "u8", 8, false, NULL, "uint8_t", true, 1, NULL, 0, NULL, 0},
-    {TY_INT, "u16", 16, false, NULL, "uint16_t", true, 1, NULL, 0, NULL, 0},
-    {TY_INT, "u32", 32, false, NULL, "uint32_t", true, 1, NULL, 0, NULL, 0},
-    {TY_INT, "u64", 64, false, NULL, "uint64_t", true, 1, NULL, 0, NULL, 0},
+    PRIM(TY_UNIT, "unit", 0, false, "void", 0),
+    PRIM(TY_BOOL, "bool", 1, false, "bool", 1),
+    PRIM(TY_INT, "i8", 8, true, "int8_t", 1),
+    PRIM(TY_INT, "i16", 16, true, "int16_t", 1),
+    PRIM(TY_INT, "i32", 32, true, "int32_t", 1),
+    PRIM(TY_INT, "i64", 64, true, "int64_t", 1),
+    PRIM(TY_INT, "u8", 8, false, "uint8_t", 1),
+    PRIM(TY_INT, "u16", 16, false, "uint16_t", 1),
+    PRIM(TY_INT, "u32", 32, false, "uint32_t", 1),
+    PRIM(TY_INT, "u64", 64, false, "uint64_t", 1),
+    PRIM(TY_INT, "usize", 0, false, "uintptr_t", 1), /* bits: the target's pointer width, set below */
+    PRIM(TY_INT, "isize", 0, true, "intptr_t", 1),
 };
 #define NPRIMS ((int)(sizeof prims / sizeof *prims))
-Type *ty_unit = &prims[0], *ty_bool = &prims[1], *ty_i32 = &prims[4];
+Type *ty_unit = &prims[0], *ty_bool = &prims[1], *ty_i32 = &prims[4], *ty_usize = &prims[10], *ty_isize = &prims[11];
+static Type *const ty_u8 = &prims[6];
 
 Type *g_array_types; /* every array type, in creation order */
+Type *g_ptr_types;   /* every raw-pointer type, in creation order */
+bool g_freestanding;
+int g_ptr_bits = (int)(sizeof(void *) * 8);
 
 static Node *prog;
 static Node builtin_print, builtin_print_param;
 
-/* ---- name tables: structs and functions are looked up by name all the time ---- */
+/* ---- name tables: structs, functions and constants are looked up by name all the time ---- */
 typedef struct { Str key; Node *val; } Slot;
 typedef struct { Slot *slots; size_t cap; } Map;
-static Map struct_map, fn_map;
+static Map struct_map, fn_map, const_map;
 
 static uint32_t hash_str(Str s) { /* FNV-1a */
     uint32_t h = 2166136261u;
@@ -67,6 +79,8 @@ typedef struct {
 #define MAX_LOCALS 8192
 static Local locals[MAX_LOCALS];
 static int nlocals, depth, next_id;
+static int unsafe_depth; /* > 0 inside an unsafe block */
+static int const_ctx;    /* > 0 while evaluating a constant: no locals, no calls */
 static Node *cur_fn;
 
 static Local *find_local(Str name) {
@@ -90,10 +104,33 @@ static int declare(int line, Str name, Type *t, int is_mut, int by_ptr) {
     return l->id;
 }
 
+static void require_unsafe(Node *n, const char *what) {
+    if (!unsafe_depth) die(n->line, "%s requires an unsafe block", what);
+}
+
+/* ---- constants ---- */
+static Type *check_expr(Node *n, Type *expect);
+
+static void const_resolve(Node *c);
+
+/* An array length is a constant expression: 8, BUF_LEN, 4 * WORDS + 1. It cannot see local variables. */
+static uint64_t const_length(Node *e) {
+    int saved_unsafe = unsafe_depth;
+    unsafe_depth = 0;
+    const_ctx++;
+    Type *t = check_expr(e, ty_usize);
+    const_ctx--;
+    unsafe_depth = saved_unsafe;
+    if (e->kind != N_INT || t->kind != TY_INT)
+        die(e->line, "an array length must be a compile-time integer constant");
+    if (e->op && e->ival) die(e->line, "an array length cannot be negative");
+    return e->ival;
+}
+
 /* ---- types ---- */
 static Node *find_struct(Str name) { return map_get(&struct_map, name); }
 
-/* Array types are interned, so two spellings of [i32; 4] are the same Type. */
+/* Array and pointer types are interned, so two spellings of [i32; 4] are the same Type. */
 static Type *array_type(Type *elem, uint64_t len) {
     Type **tail = &g_array_types;
     for (; *tail; tail = &(*tail)->next_array)
@@ -114,12 +151,36 @@ static Type *array_type(Type *elem, uint64_t len) {
     return t;
 }
 
+static Type *ptr_type(Type *pointee, bool is_mut) {
+    Type **tail = &g_ptr_types;
+    for (; *tail; tail = &(*tail)->next_ptr)
+        if ((*tail)->elem == pointee && (*tail)->is_mut == is_mut) return *tail;
+    Type *t = ARENA_NEW(&g_arena, Type);
+    t->kind = TY_PTR;
+    t->elem = pointee;
+    t->is_mut = is_mut;
+    t->is_copy = true;
+    t->nleaves = 1;
+    size_t n = strlen(pointee->name) + strlen(pointee->cname) + 32;
+    char *name = arena_alloc(&g_arena, n), *cname = arena_alloc(&g_arena, n);
+    snprintf(name, n, "*%s %s", is_mut ? "mut" : "const", pointee->name);
+    snprintf(cname, n, "ptr_%s_%s", is_mut ? "mut" : "const",
+             (pointee->kind == TY_ARRAY || pointee->kind == TY_PTR) ? pointee->cname : pointee->name);
+    t->name = name;
+    t->cname = cname;
+    *tail = t;
+    return t;
+}
+
 static Type *resolve_type(Node *ty) {
-    if (ty->op) { /* [T; N] */
+    if (ty->op == 2) /* *mut T, *const T */
+        return ptr_type(resolve_type(ty->a), ty->ival != 0);
+    if (ty->op == 1) { /* [T; N] */
         Type *elem = resolve_type(ty->a);
-        if (ty->ival == 0) die(ty->line, "an array needs at least one element");
-        if (ty->ival > 0x7fffffffu) die(ty->line, "array length %llu is too large", (unsigned long long)ty->ival);
-        return array_type(elem, ty->ival);
+        uint64_t len = const_length(ty->b);
+        if (len == 0) die(ty->line, "an array needs at least one element");
+        if (len > 0x7fffffffu) die(ty->line, "array length %llu is too large", (unsigned long long)len);
+        return array_type(elem, len);
     }
     for (int i = 1; i < NPRIMS; i++)
         if (str_is(ty->name, prims[i].name)) return &prims[i];
@@ -141,13 +202,14 @@ static Node *find_field(Node *s, Str name) {
 
 static bool is_intrinsic(Str name) {
     return str_is(name, "len") || str_is(name, "wrapping_add") || str_is(name, "wrapping_sub") ||
-           str_is(name, "wrapping_mul");
+           str_is(name, "wrapping_mul") || str_is(name, "ptr_read") || str_is(name, "ptr_write") ||
+           str_is(name, "ptr_offset") || str_is(name, "volatile_read") || str_is(name, "volatile_write");
 }
 
 static Node *lookup_fn(Str name) {
     Node *f = map_get(&fn_map, name);
     if (f) return f;
-    if (str_eq(name, builtin_print.name)) return &builtin_print;
+    if (!g_freestanding && str_eq(name, builtin_print.name)) return &builtin_print;
     return NULL;
 }
 
@@ -166,13 +228,175 @@ static void require_mutable_place(Node *n, const char *action) {
             SF(root->name), action);
 }
 
-/* ---- expressions ---- */
-static bool is_lit(Node *n) { /* a constant whose integer type comes from context */
-    return n->kind == N_INT || (n->kind == N_UN && n->op == T_MINUS && n->a->kind == N_INT) ||
-           (n->kind == N_CALL && str_is(n->name, "len"));
+/* ---- constant folding ----
+ * An expression whose operands are all literals is replaced by one literal. The rules are the run-time
+ * rules (checked arithmetic, shift counts, division), so what would trap at run time is an error here. */
+static uint64_t mask_bits(int bits) { return bits >= 64 ? UINT64_MAX : (UINT64_C(1) << bits) - 1; }
+
+static int64_t sext(uint64_t v, int bits) {
+    v &= mask_bits(bits);
+    if (bits < 64 && (v >> (bits - 1))) v |= ~mask_bits(bits);
+    return (int64_t)v;
 }
 
-static Type *check_expr(Node *n, Type *expect);
+static bool is_litnode(const Node *n) { return n->kind == N_INT || n->kind == N_BOOL; }
+
+/* the two's complement bit pattern of an integer or bool literal, truncated to its own type */
+static uint64_t lit_pattern(const Node *n) {
+    if (n->kind == N_BOOL) return n->ival;
+    return (n->op ? (uint64_t)0 - n->ival : n->ival) & mask_bits(n->type->bits);
+}
+
+/* rewrite n, in place, into an integer literal of type t holding the low t->bits of `pattern` */
+static void make_int(Node *n, Type *t, uint64_t pattern) {
+    pattern &= mask_bits(t->bits);
+    n->kind = N_INT;
+    n->a = n->b = NULL;
+    if (t->is_signed) {
+        int64_t v = sext(pattern, t->bits);
+        n->op = v < 0;
+        n->ival = v < 0 ? (uint64_t)0 - (uint64_t)v : (uint64_t)v;
+    } else {
+        n->op = 0;
+        n->ival = pattern;
+    }
+}
+
+static void make_bool(Node *n, bool v) {
+    n->kind = N_BOOL;
+    n->a = n->b = NULL;
+    n->op = 0;
+    n->ival = v;
+}
+
+static int64_t min_signed(int bits) { return bits >= 64 ? INT64_MIN : -(INT64_C(1) << (bits - 1)); }
+static int64_t max_signed(int bits) { return bits >= 64 ? INT64_MAX : (INT64_C(1) << (bits - 1)) - 1; }
+
+static void fold_bin(Node *n) {
+    Type *t = n->a->type;
+    int op = n->op;
+    if (t == ty_bool) {
+        bool x = n->a->ival, y = n->b->ival;
+        make_bool(n, op == T_EQ ? x == y : op == T_NE ? x != y : op == T_ANDAND ? (x && y) : (x || y));
+        return;
+    }
+    int bits = t->bits;
+    uint64_t xp = lit_pattern(n->a), yp = lit_pattern(n->b);
+    int64_t xs = sext(xp, bits), ys = sext(yp, bits);
+    bool sg = t->is_signed;
+    switch (op) {
+    case T_EQ: make_bool(n, xp == yp); return;
+    case T_NE: make_bool(n, xp != yp); return;
+    case T_LT: make_bool(n, sg ? xs < ys : xp < yp); return;
+    case T_LE: make_bool(n, sg ? xs <= ys : xp <= yp); return;
+    case T_GT: make_bool(n, sg ? xs > ys : xp > yp); return;
+    case T_GE: make_bool(n, sg ? xs >= ys : xp >= yp); return;
+    case T_AMP: make_int(n, t, xp & yp); return;
+    case T_PIPE: make_int(n, t, xp | yp); return;
+    case T_CARET: make_int(n, t, xp ^ yp); return;
+    case OP_WADD: make_int(n, t, xp + yp); return;
+    case OP_WSUB: make_int(n, t, xp - yp); return;
+    case OP_WMUL: make_int(n, t, xp * yp); return;
+    case T_SHL:
+    case T_SHR: {
+        if ((sg && ys < 0) || (sg ? (uint64_t)ys : yp) >= (uint64_t)bits)
+            die(n->line, "shift amount is out of range for '%s' (0 to %d)", t->name, bits - 1);
+        unsigned c = (unsigned)yp;
+        make_int(n, t, op == T_SHL ? xp << c : sg ? (uint64_t)(xs >> c) : xp >> c);
+        return;
+    }
+    default:
+        break;
+    }
+    bool ovf = false;
+    if (sg) {
+        int64_t r = 0;
+        switch (op) {
+        case T_PLUS: ovf = __builtin_add_overflow(xs, ys, &r); break;
+        case T_MINUS: ovf = __builtin_sub_overflow(xs, ys, &r); break;
+        case T_STAR: ovf = __builtin_mul_overflow(xs, ys, &r); break;
+        default: /* / and % */
+            if (ys == 0) die(n->line, "division by zero");
+            if (xs == min_signed(bits) && ys == -1) ovf = true;
+            else r = op == T_SLASH ? xs / ys : xs % ys;
+            break;
+        }
+        if (ovf || r < min_signed(bits) || r > max_signed(bits))
+            die(n->line, "constant expression overflows '%s'", t->name);
+        make_int(n, t, (uint64_t)r);
+    } else {
+        uint64_t r = 0;
+        switch (op) {
+        case T_PLUS: ovf = __builtin_add_overflow(xp, yp, &r); break;
+        case T_MINUS: ovf = xp < yp; r = xp - yp; break;
+        case T_STAR: ovf = __builtin_mul_overflow(xp, yp, &r); break;
+        default:
+            if (yp == 0) die(n->line, "division by zero");
+            r = op == T_SLASH ? xp / yp : xp % yp;
+            break;
+        }
+        if (ovf || r > mask_bits(bits)) die(n->line, "constant expression overflows '%s'", t->name);
+        make_int(n, t, r);
+    }
+}
+
+static void fold_un(Node *n) {
+    Type *t = n->a->type;
+    if (n->op == T_BANG) {
+        make_bool(n, !n->a->ival);
+    } else if (n->op == T_TILDE) {
+        make_int(n, t, ~lit_pattern(n->a));
+    } else { /* unary minus */
+        int64_t x = sext(lit_pattern(n->a), t->bits);
+        if (x == min_signed(t->bits)) die(n->line, "constant expression overflows '%s'", t->name);
+        make_int(n, t, (uint64_t)(-x));
+    }
+}
+
+static void fold_cast(Node *n) {
+    Type *from = n->a->type;
+    uint64_t v = lit_pattern(n->a);
+    if (from->kind == TY_INT && from->is_signed) v = (uint64_t)sext(v, from->bits);
+    make_int(n, n->type, v);
+}
+
+static void fold(Node *n) {
+    switch (n->kind) {
+    case N_UN:
+        if (is_litnode(n->a)) fold_un(n);
+        break;
+    case N_CAST:
+        if (is_litnode(n->a) && n->type->kind == TY_INT) fold_cast(n);
+        break;
+    case N_BIN:
+        if (is_litnode(n->a) && is_litnode(n->b)) fold_bin(n);
+        break;
+    default:
+        break;
+    }
+}
+
+/* ---- expressions ---- */
+static bool is_lit(Node *n) { /* a constant whose integer type comes from context */
+    switch (n->kind) {
+    case N_INT:
+        return true;
+    case N_UN:
+        return (n->op == T_MINUS || n->op == T_TILDE) && is_lit(n->a);
+    case N_BIN:
+        switch (n->op) {
+        case T_PLUS: case T_MINUS: case T_STAR: case T_SLASH: case T_PERCENT:
+        case T_AMP: case T_PIPE: case T_CARET: case T_SHL: case T_SHR:
+            return is_lit(n->a) && is_lit(n->b);
+        default:
+            return false;
+        }
+    case N_CALL:
+        return str_is(n->name, "len");
+    default:
+        return false;
+    }
+}
 
 static Type *check_int_literal(Node *n, Type *expect) {
     Type *t = (expect && expect->kind == TY_INT) ? expect : ty_i32;
@@ -188,9 +412,28 @@ static Type *check_int_literal(Node *n, Type *expect) {
     return t;
 }
 
+/* Can a value of this type cross the C boundary? Scalars and pointers by value, structs by value or by
+ * pointer, arrays only by pointer (to their first element). */
+static void check_c_signature(Node *fn) {
+    for (Node *p = fn->a; p; p = p->next)
+        if (p->type->kind == TY_ARRAY && p->op == M_SINK)
+            die(p->line, "parameter '%.*s': an array cannot be passed to C by value; use let, inout or set", SF(p->name));
+    if (fn->type->kind == TY_ARRAY)
+        die(fn->line, "function '%.*s': an array cannot be returned across the C boundary", SF(fn->name));
+}
+
 static Type *check_call(Node *n) {
     Node *fn = lookup_fn(n->name);
+    if (!fn && g_freestanding && str_is(n->name, "print"))
+        die(n->line, "'print' needs a hosted C library (it uses stdio), but this is a freestanding build");
     if (!fn) die(n->line, "unknown function '%.*s'", SF(n->name));
+    if (const_ctx)
+        die(n->line, "'%.*s' cannot be called here: the value must be known at compile time", SF(n->name));
+    if (fn->ext == EXT_EXTERN) {
+        char what[160];
+        snprintf(what, sizeof what, "calling the extern function '%.*s'", SF(n->name));
+        require_unsafe(n, what);
+    }
     int want = 0, got = 0;
     for (Node *p = fn->a; p; p = p->next) want++;
     for (Node *a = n->a; a; a = a->next) got++;
@@ -219,8 +462,55 @@ static Type *check_call(Node *n) {
 
 static Type *check_expr_inner(Node *n, Type *expect);
 
+/* the raw-pointer operations: each becomes an N_PTROP node */
+static Type *check_ptr_intrinsic(Node *n) {
+    int argc = 0;
+    for (Node *a = n->a; a; a = a->next) argc++;
+    bool is_offset = str_is(n->name, "ptr_offset");
+    bool is_write = str_is(n->name, "ptr_write") || str_is(n->name, "volatile_write");
+    bool is_vol = str_is(n->name, "volatile_read") || str_is(n->name, "volatile_write");
+    int want = (is_write || is_offset) ? 2 : 1;
+    if (argc != want) die(n->line, "'%.*s' takes %d argument%s", SF(n->name), want, want == 1 ? "" : "s");
+    char what[96];
+    snprintf(what, sizeof what, "'%.*s'", SF(n->name));
+    require_unsafe(n, what);
+
+    Node *p = n->a, *v = p->next;
+    p->next = NULL;
+    Type *pt = check_expr(p, NULL);
+    if (pt->kind != TY_PTR) die(p->line, "'%.*s' needs a pointer, found '%s'", SF(n->name), pt->name);
+    Type *pointee = pt->elem;
+    if (is_write && !pt->is_mut) die(p->line, "'%.*s' needs a '*mut' pointer, found '%s'", SF(n->name), pt->name);
+    if (is_vol && pointee->kind != TY_INT && pointee != ty_bool && pointee->kind != TY_PTR)
+        die(p->line, "'%.*s' works on integers, bool and pointers, not '%s'", SF(n->name), pointee->name);
+    if (!is_write && !is_offset && !pointee->is_copy)
+        die(p->line, "'%.*s' would duplicate a value of type '%s', which is not copy", SF(n->name), pointee->name);
+
+    n->kind = N_PTROP;
+    n->a = p;
+    n->b = v;
+    Type *result;
+    if (is_offset) {
+        Type *nt = check_expr(v, ty_isize);
+        if (nt->kind != TY_INT) die(v->line, "a pointer offset must be an integer, found '%s'", nt->name);
+        n->op = PO_OFFSET;
+        result = pt;
+    } else if (is_write) {
+        expect_type(v->line, pointee, check_expr(v, pointee));
+        n->op = is_vol ? PO_VWRITE : PO_WRITE;
+        result = ty_unit;
+    } else {
+        n->op = is_vol ? PO_VREAD : PO_READ;
+        result = pointee;
+    }
+    return result;
+}
+
 /* len(a) is a compile-time constant; wrapping_add/sub/mul are plain operators with modular results. */
 static Type *check_intrinsic(Node *n, Type *expect) {
+    if (str_is(n->name, "ptr_read") || str_is(n->name, "ptr_write") || str_is(n->name, "ptr_offset") ||
+        str_is(n->name, "volatile_read") || str_is(n->name, "volatile_write"))
+        return check_ptr_intrinsic(n);
     int argc = 0;
     for (Node *a = n->a; a; a = a->next) argc++;
     if (str_is(n->name, "len")) {
@@ -251,13 +541,25 @@ static Type *check_expr_inner(Node *n, Type *expect) {
         return check_int_literal(n, expect);
     case N_BOOL:
         return ty_bool;
+    case N_CSTR:
+        return ptr_type(ty_u8, false);
     case N_NAME: {
-        Local *l = find_local(n->name);
-        if (!l) die(n->line, "unknown name '%.*s'", SF(n->name));
-        n->local = l->id;
-        n->by_ptr = l->by_ptr;
-        n->mut = l->is_mut;
-        return l->type;
+        Local *l = const_ctx ? NULL : find_local(n->name);
+        if (l) {
+            n->local = l->id;
+            n->by_ptr = l->by_ptr;
+            n->mut = l->is_mut;
+            return l->type;
+        }
+        Node *c = map_get(&const_map, n->name);
+        if (!c && const_ctx && find_local(n->name))
+            die(n->line, "'%.*s' is a variable, but a compile-time constant is needed here", SF(n->name));
+        if (!c) die(n->line, "unknown name '%.*s'", SF(n->name));
+        const_resolve(c);
+        n->kind = c->type == ty_bool ? N_BOOL : N_INT; /* a constant is just its value */
+        n->ival = c->ival;
+        n->op = c->op;
+        return c->type;
     }
     case N_MEMBER: {
         Type *st = check_expr(n->a, NULL);
@@ -299,9 +601,11 @@ static Type *check_expr_inner(Node *n, Type *expect) {
         if (t == ty_unit) die(n->line, "an array cannot hold 'unit' values");
         if (!t->is_copy)
             die(n->line, "'[value; N]' copies the value N times, but '%s' is not copy", t->name);
-        if (n->ival == 0) die(n->line, "an array needs at least one element");
-        if (n->ival > 0x7fffffffu) die(n->line, "array length %llu is too large", (unsigned long long)n->ival);
-        return array_type(t, n->ival);
+        uint64_t len = const_length(n->b);
+        if (len == 0) die(n->line, "an array needs at least one element");
+        if (len > 0x7fffffffu) die(n->line, "array length %llu is too large", (unsigned long long)len);
+        n->ival = len;
+        return array_type(t, len);
     }
     case N_LIT: {
         Node *s = find_struct(n->name);
@@ -323,9 +627,12 @@ static Type *check_expr_inner(Node *n, Type *expect) {
         return s->type;
     }
     case N_CAST: {
-        Type *from = check_expr(n->a, NULL);
         Type *to = resolve_type(n->ty);
-        bool ok = (from == to) || ((from->kind == TY_INT || from->kind == TY_BOOL) && to->kind == TY_INT);
+        /* an address literal takes the pointer-sized integer type: 0xE000_E010 as *mut u32 */
+        Type *from = check_expr(n->a, (to->kind == TY_PTR && is_lit(n->a)) ? ty_usize : NULL);
+        bool ok = (from == to) || ((from->kind == TY_INT || from == ty_bool) && to->kind == TY_INT) ||
+                  (from->kind == TY_INT && to->kind == TY_PTR) || (from->kind == TY_PTR && to->kind == TY_INT) ||
+                  (from->kind == TY_PTR && to->kind == TY_PTR);
         if (!ok) die(n->line, "cannot cast '%s' to '%s'", from->name, to->name);
         return to;
     }
@@ -370,7 +677,8 @@ static Type *check_expr_inner(Node *n, Type *expect) {
             return ty_bool;
         }
         if (op == T_EQ || op == T_NE) {
-            if (lt->kind != TY_INT && lt != ty_bool) die(n->line, "cannot compare values of type '%s'", lt->name);
+            if (lt->kind != TY_INT && lt != ty_bool && lt->kind != TY_PTR)
+                die(n->line, "cannot compare values of type '%s'", lt->name);
             return ty_bool;
         }
         if (lt->kind != TY_INT) die(n->line, "operator %s needs integer operands, found '%s'", op_name(op), lt->name);
@@ -388,7 +696,32 @@ static Type *check_expr_inner(Node *n, Type *expect) {
 }
 
 static Type *check_expr(Node *n, Type *expect) {
-    return n->type = check_expr_inner(n, expect);
+    n->type = check_expr_inner(n, expect);
+    fold(n);
+    return n->type;
+}
+
+/* A constant is evaluated when first used (or at the end of the declarations), so order does not matter.
+ * Its initializer cannot see local variables. */
+static void const_resolve(Node *c) {
+    if (c->mut == 2) return;
+    if (c->mut == 1) die(c->line, "constant '%.*s' is defined in terms of itself", SF(c->name));
+    c->mut = 1;
+    int saved_unsafe = unsafe_depth;
+    unsafe_depth = 0;
+    const_ctx++;
+    Type *t = resolve_type(c->ty);
+    if (t->kind != TY_INT && t != ty_bool)
+        die(c->line, "a constant must be an integer or bool, not '%s'", t->name);
+    expect_type(c->a->line, t, check_expr(c->a, t));
+    if (!is_litnode(c->a))
+        die(c->a->line, "the value of constant '%.*s' is not known at compile time", SF(c->name));
+    c->type = t;
+    c->ival = c->a->ival;
+    c->op = c->a->kind == N_INT ? c->a->op : 0;
+    const_ctx--;
+    unsafe_depth = saved_unsafe;
+    c->mut = 2;
 }
 
 /* ---- statements ---- */
@@ -422,6 +755,8 @@ static void check_stmt(Node *s) {
         break;
     }
     case N_ASSIGN: {
+        if (s->a->kind == N_NAME && !find_local(s->a->name) && map_get(&const_map, s->a->name))
+            die(s->a->line, "'%.*s' is a constant and cannot be assigned to", SF(s->a->name));
         Type *lt = check_expr(s->a, NULL);
         require_mutable_place(s->a, "assigned to");
         expect_type(s->b->line, lt, check_expr(s->b, lt));
@@ -451,7 +786,9 @@ static void check_stmt(Node *s) {
         }
         break;
     case N_BLOCK:
+        if (s->op) unsafe_depth++; /* unsafe { ... } */
         check_block(s);
+        if (s->op) unsafe_depth--;
         break;
     default:
         die(s->line, "internal error: not a statement");
@@ -479,7 +816,7 @@ static void visit_struct(Node *s) { /* reject structs that contain themselves by
         Type *ft = f->type;
         while (ft->kind == TY_ARRAY) ft = ft->elem; /* an array of S inside S is just as infinite */
         if (ft->kind == TY_STRUCT) visit_struct(ft->decl);
-    }
+    } /* a pointer to S inside S is fine: it has a fixed size */
     s->ival = 2;
 }
 
@@ -499,6 +836,7 @@ static void check_fn(Node *fn) {
     nlocals = 0;
     depth = 1;
     next_id = 0;
+    unsafe_depth = 0;
     for (Node *p = fn->a; p; p = p->next)
         p->local = declare(p->line, p->name, p->type, p->op == M_INOUT || p->op == M_SET, p->op == M_INOUT || p->op == M_SET);
     check_block(fn->b);
@@ -509,6 +847,7 @@ static void check_fn(Node *fn) {
 
 void check_program(Node *program) {
     prog = program;
+    prims[10].bits = prims[11].bits = g_ptr_bits; /* usize / isize */
 
     builtin_print.kind = N_FN;
     builtin_print.name = (Str){"print", 5};
@@ -519,17 +858,19 @@ void check_program(Node *program) {
     builtin_print_param.type = ty_i32;
     builtin_print.a = &builtin_print_param;
 
-    /* 1. declare struct and function names */
-    size_t nstructs = 0, nfns = 0;
+    /* 1. declare struct, function and constant names */
+    size_t nstructs = 0, nfns = 0, nconsts = 0;
     for (Node *d = prog; d; d = d->next) {
         if (d->kind == N_STRUCT) nstructs++;
+        else if (d->kind == N_CONST) nconsts++;
         else nfns++;
     }
     map_init(&struct_map, nstructs);
     map_init(&fn_map, nfns);
+    map_init(&const_map, nconsts);
     for (Node *d = prog; d; d = d->next) {
-        if (!map_put(d->kind == N_STRUCT ? &struct_map : &fn_map, d->name, d))
-            die(d->line, "'%.*s' is defined twice", SF(d->name));
+        Map *m = d->kind == N_STRUCT ? &struct_map : d->kind == N_CONST ? &const_map : &fn_map;
+        if (!map_put(m, d->name, d)) die(d->line, "'%.*s' is defined twice", SF(d->name));
         if (d->kind == N_STRUCT) {
             for (int i = 0; i < NPRIMS; i++)
                 if (str_is(d->name, prims[i].name)) die(d->line, "'%.*s' is a builtin type", SF(d->name));
@@ -543,7 +884,7 @@ void check_program(Node *program) {
             t->decl = d;
             t->is_copy = d->op != 0;
             d->type = t;
-        } else if (str_eq(d->name, builtin_print.name) || is_intrinsic(d->name)) {
+        } else if (d->kind == N_FN && (str_eq(d->name, builtin_print.name) || is_intrinsic(d->name))) {
             die(d->line, "'%.*s' is a builtin function", SF(d->name));
         }
     }
@@ -569,7 +910,9 @@ void check_program(Node *program) {
                     SF(f->name), SF(d->name), f->type->name);
     }
 
-    /* 3. function signatures */
+    /* 3. constants, then function signatures */
+    for (Node *d = prog; d; d = d->next)
+        if (d->kind == N_CONST) const_resolve(d);
     Node *main_fn = NULL;
     for (Node *d = prog; d; d = d->next) {
         if (d->kind != N_FN) continue;
@@ -579,13 +922,14 @@ void check_program(Node *program) {
             p->type = resolve_type(p->ty);
         }
         d->type = d->ty ? resolve_type(d->ty) : ty_unit;
+        if (d->ext != EXT_NONE) check_c_signature(d);
         if (str_is(d->name, "main")) main_fn = d;
     }
     if (!main_fn) die(1, "no 'main' function");
-    if (main_fn->a || main_fn->type != ty_i32)
+    if (main_fn->a || main_fn->type != ty_i32 || main_fn->ext != EXT_NONE)
         die(main_fn->line, "'main' must be declared as 'fn main() -> i32'");
 
-    /* 4. bodies */
+    /* 4. bodies (extern functions have none) */
     for (Node *d = prog; d; d = d->next)
-        if (d->kind == N_FN) check_fn(d);
+        if (d->kind == N_FN && d->ext != EXT_EXTERN) check_fn(d);
 }

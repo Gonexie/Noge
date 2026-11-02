@@ -1,0 +1,2 @@
+// error: 'ptr_read' requires an unsafe block
+fn main() -> i32 { let p = 4096 as *const u32; let x = ptr_read(p); return 0; }

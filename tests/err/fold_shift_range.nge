@@ -1,0 +1,2 @@
+// error: shift amount 40 is out of range
+fn main() -> i32 { let x = 1 << (30 + 10); return 0; }

@@ -1,0 +1,2 @@
+// error: 'ptr_read' needs a pointer, found 'u32'
+fn main() -> i32 { let x: u32 = 1; unsafe { let y = ptr_read(x); } return 0; }

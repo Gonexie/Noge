@@ -1,0 +1,35 @@
+// Constants are integers or bool, known at compile time; they can use each other in any order and be
+// used as array lengths. Expressions made only of literals and constants are folded by the compiler.
+const KB: u32 = 1024;
+const BUF_LEN: usize = 4 * 2;
+const WORDS: usize = BUF_LEN / 2;
+const MASK: u32 = (1 << 4) - 1;
+const NEG: i32 = -5;
+const FLAG: bool = !(KB < 100) && true;
+const LATER: u8 = FIRST + 1;       // used before FIRST is declared
+const FIRST: u8 = 41;
+const BIG: u64 = 0xFFFF_FFFF_FFFF;  // digit separators
+const BITS: u8 = 0b1010_0101;
+
+struct Buf { data: [u8; BUF_LEN], n: usize }
+
+fn main() -> i32 {
+    var b = Buf { data: [7; BUF_LEN], n: WORDS };
+    print(len(b.data) as i32);       // 8
+    print(b.n as i32);               // 4
+    print(MASK as i32);              // 15
+    print(NEG);                      // -5
+    print(KB as i32 * 2);            // 2048
+    print(LATER as i32);             // 42
+    if FLAG { print(1); } else { print(0); }   // 1
+    print((BIG >> 40) as i32);       // 0xFFFF_FFFF_FFFF >> 40 = 0xFF = 255
+    print(BITS as i32);              // 165
+    print(wrapping_add(250 as u8, 10 as u8) as i32);   // folded at compile time: 4
+    print((200 + 55) as i32);        // 255
+    print(-7 / 2);                   // -3
+    print(7 % -3);                   // 1
+    print(-16 >> 2);                 // -4
+    let arr = [0; 3 + 1];
+    print(len(arr) as i32);          // 4
+    return 0;
+}

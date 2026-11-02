@@ -1,0 +1,2 @@
+// error: operator '+' needs integer operands, found '*mut u32'
+fn main() -> i32 { let a = 4096 as *mut u32; let b = a + a; return 0; }

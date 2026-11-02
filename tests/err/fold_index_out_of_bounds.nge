@@ -1,0 +1,2 @@
+// error: index 4 is out of bounds for an array of length 4
+fn main() -> i32 { let a = [0; 4]; let x = a[2 + 2]; return 0; }

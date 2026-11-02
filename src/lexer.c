@@ -22,8 +22,8 @@ const char *op_name(int op) {
 static const struct { const char *s; TokKind k; } keywords[] = {
     {"fn", T_FN},       {"struct", T_STRUCT}, {"let", T_LET},     {"var", T_VAR},
     {"if", T_IF},       {"else", T_ELSE},     {"while", T_WHILE}, {"return", T_RETURN},
-    {"as", T_AS},       {"true", T_TRUE},     {"false", T_FALSE}, {"inout", T_INOUT},
-    {"sink", T_SINK},   {"set", T_SET},       {"copy", T_COPY},
+    {"as", T_AS},       {"true", T_TRUE},     {"false", T_FALSE}, {"unsafe", T_UNSAFE},
+    {"extern", T_EXTERN}, {"export", T_EXPORT}, {"const", T_CONST}, {"mut", T_MUT},
 };
 
 /* two-character operators first so they win over their prefixes */
@@ -71,7 +71,43 @@ Token *lex(const char *src) {
             return t;
         }
 
-        if (isalpha((unsigned char)*p) || *p == '_') {
+        if (*p == '"' || (*p == 'c' && p[1] == '"')) { /* "text" or c"text" */
+            const char *s = p;
+            tk.kind = *p == 'c' ? T_CSTR : T_STR;
+            if (*p == 'c') p++;
+            p++; /* opening quote */
+            char *buf = arena_alloc(&g_arena, (size_t)(strlen(p) < 4096 ? strlen(p) : 4096) + 1);
+            int n = 0;
+            for (;; p++) {
+                if (!*p || *p == '\n') die(line, "unterminated string literal");
+                if (*p == '"') break;
+                if (n >= 4095) die(line, "string literal is too long");
+                if (*p != '\\') {
+                    buf[n++] = *p;
+                    continue;
+                }
+                p++;
+                switch (*p) {
+                case 'n': buf[n++] = '\n'; break;
+                case 'r': buf[n++] = '\r'; break;
+                case 't': buf[n++] = '\t'; break;
+                case '0': buf[n++] = '\0'; break;
+                case '\\': buf[n++] = '\\'; break;
+                case '"': buf[n++] = '"'; break;
+                case 'x':
+                    if (digit_val((unsigned char)p[1]) > 15 || digit_val((unsigned char)p[2]) > 15)
+                        die(line, "'\\x' needs two hexadecimal digits");
+                    buf[n++] = (char)(digit_val((unsigned char)p[1]) * 16 + digit_val((unsigned char)p[2]));
+                    p += 2;
+                    break;
+                default: die(line, "unknown escape '\\%c' in string literal", *p ? *p : ' ');
+                }
+            }
+            p++; /* closing quote */
+            tk.text.n = (int)(p - s);
+            tk.str.p = buf;
+            tk.str.n = n;
+        } else if (isalpha((unsigned char)*p) || *p == '_') {
             const char *s = p;
             while (isalnum((unsigned char)*p) || *p == '_') p++;
             tk.text.n = (int)(p - s);
@@ -82,14 +118,20 @@ Token *lex(const char *src) {
             const char *s = p;
             uint64_t base = 10, v = 0;
             if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) { base = 16; p += 2; }
+            else if (p[0] == '0' && (p[1] == 'b' || p[1] == 'B')) { base = 2; p += 2; }
             const char *digits = p;
-            while (digit_val((unsigned char)*p) < (int)base) {
+            for (;;) {
+                if (*p == '_' && p != digits && (digit_val((unsigned char)p[1]) < (int)base || p[1] == '_')) {
+                    p++; /* digit separator: 0x4002_1018 */
+                    continue;
+                }
+                if (digit_val((unsigned char)*p) >= (int)base) break;
                 uint64_t d = (uint64_t)digit_val((unsigned char)*p);
                 if (v > (UINT64_MAX - d) / base) die(line, "integer literal too large");
                 v = v * base + d;
                 p++;
             }
-            if (p == digits) die(line, "expected digits after '0x'");
+            if (p == digits) die(line, "expected digits after '%.2s'", s);
             if (isalnum((unsigned char)*p) || *p == '_')
                 die(line, "invalid character '%c' in number", *p);
             tk.kind = T_INT;

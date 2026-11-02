@@ -1,0 +1,2 @@
+// error: cannot cast 'bool' to '*mut u32'
+fn main() -> i32 { let a = true as *mut u32; return 0; }

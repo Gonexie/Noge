@@ -1,0 +1,2 @@
+// error: type mismatch: expected 'u32', found 'bool'
+fn main() -> i32 { let p = 4096 as *mut u32; unsafe { ptr_write(p, true); } return 0; }

@@ -1,0 +1,34 @@
+// An interrupt handler written in Noge. `export "C"` gives the function the plain C name SysTick_Handler,
+// which replaces the weak default in the vector table (startup.c). The tick counter is owned by C
+// (board_qemu.c) and shared through a volatile pointer.
+extern "C" fn board_ticks() -> *mut u32;
+extern "C" fn semihost_puts(s: *const u8);
+extern "C" fn semihost_exit(code: i32);
+
+const SYST_CSR: usize = 0xE000_E010;
+const SYST_RVR: usize = 0xE000_E014;
+const SYST_CVR: usize = 0xE000_E018;
+
+fn reg_write(addr: usize, value: u32) {
+    unsafe { volatile_write(addr as *mut u32, value); }
+}
+
+export "C" fn SysTick_Handler() {
+    unsafe {
+        let t = board_ticks();
+        volatile_write(t, volatile_read(t) + 1);
+    }
+}
+
+fn main() -> i32 {
+    reg_write(SYST_RVR, 7999);
+    reg_write(SYST_CVR, 0);
+    reg_write(SYST_CSR, 0b111);          // enabled, CPU clock, interrupt on every wrap
+    unsafe {
+        let t = board_ticks();
+        while volatile_read(t) < 10 { }  // wait for the handler to count ten
+        semihost_puts(c"ten ticks counted by the handler\n");
+        semihost_exit(0);
+    }
+    return 0;
+}

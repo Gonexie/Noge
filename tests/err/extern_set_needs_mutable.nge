@@ -1,0 +1,3 @@
+// error: is read-only
+extern "C" fn f(a: set i32);
+fn main() -> i32 { let x = 1; unsafe { f(&x); } return 0; }

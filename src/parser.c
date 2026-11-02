@@ -35,24 +35,33 @@ static Node *mk(NodeKind k, int line) {
     return n;
 }
 
-/* Type  ::=  Name  |  "[" Type ";" IntLiteral "]" */
+/* Type  ::=  Name  |  "[" Type ";" ConstExpr "]"  |  "*" ("mut" | "const") Type
+ * N_TYPE: op 0 named, 1 array (a = element, b = length expression), 2 pointer (a = pointee, ival = is mut) */
+static Node *parse_expr(void);
 static Node *parse_type(void) {
     Token *t = cur();
     Node *n = mk(N_TYPE, t->line);
     if (t->kind == T_LBRACKET) {
         advance();
-        n->op = 1; /* array */
+        n->op = 1;
         n->a = parse_type();
         expect(T_SEMI);
-        n->ival = expect(T_INT)->ival;
+        n->b = parse_expr(); /* a constant expression: 8, BUF_LEN, 4 * WORDS */
         expect(T_RBRACKET);
+        return n;
+    }
+    if (t->kind == T_STAR) {
+        advance();
+        n->op = 2;
+        if (accept(T_MUT)) n->ival = 1;
+        else if (!accept(T_CONST)) die(cur()->line, "expected 'mut' or 'const' after '*', found %s", describe(cur()));
+        n->a = parse_type();
         return n;
     }
     n->name = expect(T_IDENT)->text;
     return n;
 }
 
-static Node *parse_expr(void);
 static Node *parse_block(void);
 
 static Node *parse_primary(void) {
@@ -81,7 +90,7 @@ static Node *parse_primary(void) {
         if (accept(T_SEMI)) {
             n = mk(N_REPEAT, t->line);
             n->a = first;
-            n->ival = expect(T_INT)->ival;
+            n->b = parse_expr(); /* the length: a constant expression */
         } else {
             n = mk(N_ARRAY, t->line);
             n->a = first;
@@ -95,6 +104,14 @@ static Node *parse_primary(void) {
         expect(T_RBRACKET);
         return n;
     }
+    case T_CSTR: { /* c"text": a pointer to NUL-terminated bytes */
+        advance();
+        Node *n = mk(N_CSTR, t->line);
+        n->name = t->str;
+        return n;
+    }
+    case T_STR:
+        die(t->line, "a string literal needs the c prefix, as in c\"text\"");
     case T_LPAREN: {
         advance();
         int save = nolit;
@@ -296,6 +313,12 @@ static Node *parse_stmt(void) {
     }
     case T_LBRACE:
         return parse_block();
+    case T_UNSAFE: { /* unsafe { ... }: an ordinary block whose op is 1 */
+        advance();
+        Node *b = parse_block();
+        b->op = 1;
+        return b;
+    }
     default: {
         Node *e = parse_expr();
         if (accept(T_ASSIGN)) {
@@ -347,9 +370,15 @@ static Node *parse_struct(bool is_copy) {
     return s;
 }
 
-static Node *parse_fn(void) {
+/* inout, sink, set and copy are keywords only where they can be: in front of a parameter's type, and in
+ * front of `struct`. Anywhere else they are ordinary names (a register helper may have a parameter `set`). */
+static bool starts_type(const Token *t) { return t->kind == T_IDENT || t->kind == T_LBRACKET || t->kind == T_STAR; }
+static bool mode_word(const char *w) { return cur()->kind == T_IDENT && str_is(cur()->text, w) && starts_type(peek(1)); }
+
+static Node *parse_fn(int ext) {
     int line = advance()->line;
     Node *f = mk(N_FN, line);
+    f->ext = ext;
     f->name = expect(T_IDENT)->text;
     expect(T_LPAREN);
     Node **tail = &f->a;
@@ -359,9 +388,9 @@ static Node *parse_fn(void) {
         Node *p = mk(N_PARAM, pn->line);
         p->name = pn->text;
         p->op = M_LET;
-        if (accept(T_INOUT)) p->op = M_INOUT;
-        else if (accept(T_SINK)) p->op = M_SINK;
-        else if (accept(T_SET)) p->op = M_SET;
+        if (mode_word("inout")) { advance(); p->op = M_INOUT; }
+        else if (mode_word("sink")) { advance(); p->op = M_SINK; }
+        else if (mode_word("set")) { advance(); p->op = M_SET; }
         else accept(T_LET);
         p->ty = parse_type();
         *tail = p;
@@ -370,8 +399,22 @@ static Node *parse_fn(void) {
     }
     expect(T_RPAREN);
     if (accept(T_ARROW)) f->ty = parse_type();
-    f->b = parse_block();
+    if (ext == EXT_EXTERN) expect(T_SEMI); /* defined in C */
+    else f->b = parse_block();
     return f;
+}
+
+/* const NAME: Type = expression;   (a compile-time value) */
+static Node *parse_const(void) {
+    int line = advance()->line;
+    Node *c = mk(N_CONST, line);
+    c->name = expect(T_IDENT)->text;
+    expect(T_COLON);
+    c->ty = parse_type();
+    expect(T_ASSIGN);
+    c->a = parse_expr();
+    expect(T_SEMI);
+    return c;
 }
 
 Node *parse_program(Token *tokens) {
@@ -381,14 +424,24 @@ Node *parse_program(Token *tokens) {
     Node *head = NULL, **tail = &head;
     while (cur()->kind != T_EOF) {
         Node *d;
-        if (cur()->kind == T_FN) d = parse_fn();
+        if (cur()->kind == T_FN) d = parse_fn(EXT_NONE);
+        else if (cur()->kind == T_EXTERN || cur()->kind == T_EXPORT) { /* extern "C" fn f(..); / export "C" fn f(..) {..} */
+            int ext = cur()->kind == T_EXTERN ? EXT_EXTERN : EXT_EXPORT;
+            const char *what = ext == EXT_EXTERN ? "extern" : "export";
+            advance();
+            Token *abi = expect(T_STR);
+            if (!str_is(abi->str, "C")) die(abi->line, "only the \"C\" calling convention is supported");
+            if (cur()->kind != T_FN) die(cur()->line, "expected 'fn' after '%s \"C\"', found %s", what, describe(cur()));
+            d = parse_fn(ext);
+        }
+        else if (cur()->kind == T_CONST) d = parse_const();
         else if (cur()->kind == T_STRUCT) d = parse_struct(false);
-        else if (cur()->kind == T_COPY) {
+        else if (cur()->kind == T_IDENT && str_is(cur()->text, "copy")) {
             advance();
             if (cur()->kind != T_STRUCT)
                 die(cur()->line, "expected 'struct' after 'copy', found %s", describe(cur()));
             d = parse_struct(true);
-        } else die(cur()->line, "expected 'fn', 'struct' or 'copy struct', found %s", describe(cur()));
+        } else die(cur()->line, "expected 'fn', 'struct', 'copy struct', 'const', 'extern' or 'export', found %s", describe(cur()));
         *tail = d;
         tail = &d->next;
     }

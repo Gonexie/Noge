@@ -1,0 +1,53 @@
+// Raw pointers, used on memory that C allocates. Every read, write and offset needs an unsafe block.
+extern "C" fn malloc(n: usize) -> *mut u8;
+extern "C" fn calloc(count: usize, size: usize) -> *mut u32;
+extern "C" fn free(p: *mut u8);
+
+copy struct Pair { a: i32, b: i32 }
+
+struct Cursor { at: *mut u32, left: usize }   // a pointer can live in a struct
+
+fn next(c: inout Cursor) -> u32 {
+    var v: u32 = 0;
+    unsafe {
+        v = ptr_read(c.at);
+        c.at = ptr_offset(c.at, 1);
+    }
+    c.left = c.left - 1;
+    return v;
+}
+
+fn main() -> i32 {
+    unsafe {
+        let words = calloc(8, 4);                  // zeroed memory for eight u32
+        if words == 0 as *mut u32 { return 1; }    // pointers compare
+        var i = 0;
+        while i < 8 {
+            ptr_write(ptr_offset(words, i), (i * i) as u32);
+            i = i + 1;
+        }
+        print(ptr_read(ptr_offset(words, 7)) as i32);        // 49
+        var c = Cursor { at: words, left: 8 };
+        let first = next(&c);
+        let second = next(&c);
+        let third = next(&c);
+        print((first + second + third) as i32);              // 0 + 1 + 4 = 5
+        print(c.left as i32);                                // 5
+
+        let raw = malloc(8) as *mut Pair;                    // pointer casts
+        ptr_write(raw, Pair { a: 3, b: 4 });
+        print(ptr_read(raw).a * 10 + ptr_read(raw).b);       // 34
+
+        volatile_write(words, 0xABCD);
+        print(volatile_read(words) as i32);                  // 43981
+
+        let addr = words as usize;                           // a pointer is an address
+        print((addr != 0) as i32);                           // 1
+        let back = addr as *mut u32;
+        print((back == words) as i32);                       // 1
+
+        free(raw as *mut u8);
+        free(words as *mut u8);
+    }
+    return 0;
+}

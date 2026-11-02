@@ -55,7 +55,8 @@ Rules checked by the compiler
 
 Unsafe boundary
 - `extern "C" fn` declarations for vendor libraries. Calls to them are only allowed inside `unsafe { }`.
-- Raw pointer type exists only inside `unsafe`.
+- Raw pointers: the type may appear anywhere, but reading, writing and offsetting through one needs `unsafe { }`
+  (this replaces the first sketch's "the type only exists inside unsafe"; see the milestone 4 decisions).
 
 Example
 ```
@@ -98,7 +99,7 @@ Notes
 1. Lexer, parser, type check for ints, structs, functions. Emit C, run hello-world on host. **Done** (see README).
 2. Init/move/exclusivity pass, with a negative test suite of programs that must be rejected. **Done** (see below).
 3. Arrays, bounds checks, overflow traps, an IR with a fixed evaluation order. **Done** (see below). Arena/handle types moved to the generics milestone.
-4. C FFI with `unsafe`; build a blinky for a real target (e.g. ARM Cortex-M via arm-none-eabi-gcc).
+4. C FFI with `unsafe`; build a blinky for a real target (e.g. ARM Cortex-M via arm-none-eabi-gcc). **Done** on an emulated Cortex-M3 (see below); not yet run on a physical board.
 5. Enums and pattern matching; then generics.
 
 ## Decisions made in milestone 2
@@ -149,7 +150,57 @@ Notes
 - **Dictionary lookups use hash tables.** The profile of a 68,000-line program showed 47% of the time in linear
   name lookups, which were quadratic in the number of declarations.
 
+## Decisions made in milestone 4
+
+- **`unsafe` guards use, not the type.** The first sketch said the raw pointer type exists only inside `unsafe`. That
+  would forbid a driver struct with a `*mut u32` field or a safe wrapper that returns a pointer, and it protects
+  nothing: a pointer value can do no harm until it is read, written or offset. So (as in Rust) pointer types, casts
+  and comparisons are safe, and `ptr_read`, `ptr_write`, `volatile_read`, `volatile_write`, `ptr_offset` and calls
+  to `extern` functions need an `unsafe` block. Intended style: put the raw access in two tiny safe wrappers
+  (`reg_read`, `reg_write`) and use only those.
+- **There is no address-of operator.** A raw pointer therefore cannot alias a Noge variable, and the borrow rules
+  cannot be bypassed from `unsafe`. Giving C access to a Noge variable is done with an extern parameter mode
+  (`inout`, `let`, `set`), which the flow pass checks like any other call: arrays travel as a pointer to their
+  first element, `let` structs as `const T *`, `sink` structs by value.
+- **The C boundary is a link-level contract.** Extern functions are declared in the emitted C under a private name
+  (`x_strlen`) with an assembler label giving the real symbol, and exports (`f_tick`) the same in the other
+  direction. So nothing can clash with a libc header or with generated names, and no vendor header is included.
+  Struct layouts must agree with the C side field for field. This relies on GNU `__asm__` labels, like the
+  `__builtin_*_overflow` default; both are fine for the GCC/Clang toolchains embedded work uses.
+- **Constants and a real constant folder.** `const NAME: T = expr;` is an integer or bool, resolved lazily in any
+  order with cycle detection; its initializer sees only other constants (no locals, no calls). Folding applies to
+  every expression made of literals and constants, with the run-time semantics (checked arithmetic, shift counts,
+  division), so what would trap at run time is a compile error. That closes the milestone 3 gap ("`255 + 1` traps
+  at run time"). Array lengths are constant expressions. The folder is checked against run-time evaluation over
+  21,844 operand combinations (`tests/arith_check.py`), and the check was mutation-tested: four deliberate bugs in
+  the folder were each caught.
+- **`usize` / `isize` follow `--ptr-bits`.** The compiler needs the target's pointer width to range-check address
+  literals and to type `size_t`-like C parameters, so it is an option (`32` or `64`) and must match the C compiler
+  used for the output. 16-bit targets are out of scope: a 16-bit `int` changes C's promotion rules and nothing has
+  been tested there.
+- **Freestanding mode** (`--freestanding`, or `--target=cortex-m` which adds 32-bit pointers) emits only
+  `<stdbool.h>` and `<stdint.h>`, drops `print`, and routes failed checks to `noge_trap_hook(kind, line)`, a weak
+  function that loops forever unless the board defines it. The generated code can still make the compiler call
+  `memcpy` / `memset` / `memmove`, so a libc such as newlib-nano (or hand-written versions) is linked.
+- **`inout`, `sink`, `set` and `copy` are contextual keywords.** The first real register code wanted a parameter
+  named `set`. They are keywords only where a parameter's mode or `copy struct` can appear.
+- **Literals for C.** `c"text"` is a `*const u8` to static NUL-terminated bytes; there are no other string types
+  yet. Numbers accept `0b...` and digit separators because register code is full of them.
+- **Interrupt handlers are `export "C" fn`.** No new mechanism: the function gets the plain C name and replaces the
+  weak default in the vector table. Because there are no global variables, shared state is C-owned memory reached
+  through a volatile pointer, as in `examples/cortex-m/systick.nge`.
+- **Verification is by emulation.** The firmware runs under QEMU (`stm32vldiscovery`, a Cortex-M3). QEMU does not
+  model the STM32 GPIO and RCC blocks, but logs every access to them, and the tests assert that exact register
+  traffic. Results were identical at `-O0` / `-O1` / `-O2` / `-Os` and with the portable `--no-builtins` checks. The
+  firmware has **not** been run on a physical board, so real-silicon behaviour (clock tree, LED polarity, timing)
+  is unverified.
+
 ## Open questions
 - Do we need Hylo-style `subscript` projections to access into containers without copying, or is `inout` on paths plus arenas enough?
 - Copy vs move default for small structs.
-- Interrupt handlers and shared state with main code: needs its own rule (likely a `Volatile`/critical-section type in unsafe-wrapped library code).
+- Interrupt handlers and shared state with main code: `export "C"` handlers and C-owned memory work today, but a
+  typed answer (global `static`s, a `Volatile<T>` or critical-section type) is still to be designed.
+- A safe way to hand C a pointer to a Noge buffer that outlives one call (today only extern parameter modes, for
+  the duration of the call).
+- A pointer-to-first-element intrinsic for arrays (`as_ptr`) would shorten C string and buffer code, at the price of
+  a pointer that the flow pass cannot track.

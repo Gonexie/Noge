@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Differential test of the generated overflow / division / shift checks.
+"""Differential tests of the arithmetic the compiler does for you.
+
+1. The generated overflow / division / shift checks (the run-time half).
+2. The constant folder: for every type and operator, the value of `A op B` computed at compile time (on
+   constants) must equal the same operation done at run time (on variables), and operands that would
+   overflow, divide by zero or shift out of range must be compile errors.
 
 For every integer type and operator it compiles a one-operator Noge function, builds the generated C
 with NOGE_TRAP redefined to longjmp, and compares each result (or trap kind) against __int128
@@ -100,6 +105,115 @@ def expected(op, bits, signed):
         return "if (x == LO) want_trap = 1; else want = -x;"
     return "want = wrap(~x);"  # bnot
 
+
+# ---------------------------------------------------------------------------------------------------
+# 2. constant folding
+# ---------------------------------------------------------------------------------------------------
+def wrap(v, bits, signed):
+    v &= (1 << bits) - 1
+    return v - (1 << bits) if signed and v >= (1 << (bits - 1)) else v
+
+def tdiv(a, b):  # C division truncates toward zero
+    q = abs(a) // abs(b)
+    return q if (a < 0) == (b < 0) else -q
+
+def reference(op, a, b, bits, signed):
+    """Result of `a op b`, or None if it must be rejected (overflow, divide by zero, bad shift)."""
+    lo = -(1 << (bits - 1)) if signed else 0
+    hi = (1 << (bits - 1)) - 1 if signed else (1 << bits) - 1
+    fits = lambda v: v if lo <= v <= hi else None
+    if op == "add": return fits(a + b)
+    if op == "sub": return fits(a - b)
+    if op == "mul": return fits(a * b)
+    if op in ("div", "rem"):
+        if b == 0 or (signed and a == lo and b == -1): return None
+        return fits(tdiv(a, b) if op == "div" else a - tdiv(a, b) * b)
+    if op in ("shl", "shr"):
+        if b < 0 or b >= bits: return None
+        return wrap(a << b, bits, signed) if op == "shl" else a >> b
+    if op == "band": return a & b
+    if op == "bor": return a | b
+    if op == "bxor": return a ^ b
+    if op == "wadd": return wrap(a + b, bits, signed)
+    if op == "wsub": return wrap(a - b, bits, signed)
+    if op == "wmul": return wrap(a * b, bits, signed)
+    if op in ("lt", "le", "gt", "ge", "eq", "ne"):
+        return {"lt": a < b, "le": a <= b, "gt": a > b, "ge": a >= b, "eq": a == b, "ne": a != b}[op]
+    if op == "neg": return None if a == lo else -a
+    if op == "bnot": return wrap(~a, bits, signed)
+
+BIN_SYM = {"add": "{a} + {b}", "sub": "{a} - {b}", "mul": "{a} * {b}", "div": "{a} / {b}", "rem": "{a} % {b}",
+           "shl": "{a} << {b}", "shr": "{a} >> {b}", "band": "{a} & {b}", "bor": "{a} | {b}", "bxor": "{a} ^ {b}",
+           "wadd": "wrapping_add({a}, {b})", "wsub": "wrapping_sub({a}, {b})", "wmul": "wrapping_mul({a}, {b})",
+           "lt": "{a} < {b}", "le": "{a} <= {b}", "gt": "{a} > {b}", "ge": "{a} >= {b}", "eq": "{a} == {b}", "ne": "{a} != {b}"}
+UN_SYM = {"neg": "-{a}", "bnot": "~{a}"}
+
+def pick(vals, n):
+    step = max(1, len(vals) // n)
+    return vals[::step][:n]
+
+def fold_check():
+    bad = 0
+    checked = rejected = 0
+    with tempfile.TemporaryDirectory() as tmp:
+        for tname, (bits, signed, _c) in TYPES.items():
+            edge, rnd = values(bits, signed)
+            vals = pick(sorted(set(edge) | set(rnd)), 13)
+            consts, body, meta, bad_pairs = [], [], [], []
+            def operand(v):
+                k = len(consts)
+                consts.append(f"const K{k}: {tname} = {v};")
+                body.append(f"    let v{k}: {tname} = K{k};")
+                return k
+            idx = {}
+            for v in vals:
+                idx[v] = operand(v)
+            case = 0
+            for op in list(BIN_SYM) + list(UN_SYM):
+                if op == "neg" and not signed: continue
+                if op == "bnot" and False: continue
+                binary = op in BIN_SYM
+                for a in vals:
+                    for b in (vals if binary else [0]):
+                        r = reference(op, a, b, bits, signed)
+                        if r is None:
+                            bad_pairs.append((op, a, b, binary))
+                            continue
+                        tmpl = (BIN_SYM if binary else UN_SYM)[op]
+                        ka, kb = idx[a], idx[b] if binary else 0
+                        lhs = tmpl.format(a=f"K{ka}", b=f"K{kb}")
+                        rhs = tmpl.format(a=f"v{ka}", b=f"v{kb}")
+                        body.append(f"    if ({lhs}) != ({rhs}) {{ print({case}); }}")
+                        meta.append((op, a, b))
+                        case += 1
+            checked += case
+            src = "\n".join(consts) + "\nfn main() -> i32 {\n" + "\n".join(body) + "\n    return 0;\n}\n"
+            open(f"{tmp}/f.nge", "w").write(src)
+            r = subprocess.run([NOGEC, "-o", f"{tmp}/f.c", f"{tmp}/f.nge"], capture_output=True, text=True)
+            if r.returncode:
+                print(f"[fold {tname}] nogec failed:", r.stderr[:600]); bad += 1; continue
+            r = subprocess.run([CC, "-std=gnu99", "-O1", "-w", "-o", f"{tmp}/f", f"{tmp}/f.c"], capture_output=True, text=True)
+            if r.returncode:
+                print(r.stderr[:1500]); sys.exit(2)
+            out = subprocess.run([f"{tmp}/f"], capture_output=True, text=True).stdout.split()
+            for n in out[:5]:
+                op, a, b = meta[int(n)]
+                print(f"[fold {tname}] folded value differs from run time: {op} a={a} b={b}")
+            bad += len(out)
+            # what the reference says must not compile really does not
+            for op, a, b, binary in pick(bad_pairs, 12):
+                tmpl = (BIN_SYM if binary else UN_SYM)[op]
+                expr = tmpl.format(a="A", b="B")
+                src = f"const A: {tname} = {a};\nconst B: {tname} = {b};\nconst R: " + ("bool" if op in ("lt","le","gt","ge","eq","ne") else tname) + f" = {expr};\nfn main() -> i32 {{ return 0; }}\n"
+                open(f"{tmp}/e.nge", "w").write(src)
+                r = subprocess.run([NOGEC, "-o", "/dev/null", f"{tmp}/e.nge"], capture_output=True, text=True)
+                rejected += 1
+                if r.returncode == 0:
+                    bad += 1
+                    print(f"[fold {tname}] accepted {op} a={a} b={b}, which overflows or traps")
+    print(f"fold_check: {'FAILED' if bad else 'ok'} ({checked} folded results compared with run time, {rejected} trapping cases rejected)")
+    return bad
+
 def main():
     bad = 0
     with tempfile.TemporaryDirectory() as tmp:
@@ -123,6 +237,7 @@ def main():
                         bad += 1
                         print(f"[{'portable' if mode else 'builtin'}]", *line, sep="\n  ")
     print("arith_check:", "FAILED" if bad else "ok", f"({len(TYPES)} types x {len(OPS)} operators x 2 modes)")
+    bad += fold_check()
     sys.exit(1 if bad else 0)
 
 main()

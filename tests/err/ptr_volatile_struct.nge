@@ -1,0 +1,3 @@
+// error: works on integers, bool and pointers, not 'Big'
+copy struct Big { a: i32 }
+fn main() -> i32 { let p = 4096 as *const Big; unsafe { let b = volatile_read(p); } return 0; }

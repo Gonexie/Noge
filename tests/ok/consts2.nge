@@ -1,0 +1,26 @@
+// A constant used as an array length before its declaration, bool constants, casts of constants,
+// and constants made from other constants.
+struct Table { cells: [u16; ROWS * COLS], used: bool }
+
+const ROWS: usize = 3;
+const COLS: usize = ROWS + 1;
+const ALL_ON: bool = ENABLED && !DISABLED;
+const ENABLED: bool = true;
+const DISABLED: bool = false;
+const AS_BYTE: u8 = true as u8;
+const SHIFTED: u32 = (AS_BYTE as u32) << 31;
+const NEGATIVE: i16 = -(ROWS as i16) * 100;
+const LIMIT: i64 = 1 << 40;
+
+fn main() -> i32 {
+    var t = Table { cells: [7; ROWS * COLS], used: ALL_ON };
+    print(len(t.cells) as i32);          // 12
+    print(t.used as i32);                // 1
+    print(AS_BYTE as i32);               // 1
+    print((SHIFTED >> 31) as i32);       // 1
+    print(NEGATIVE as i32);              // -300
+    print((LIMIT >> 38) as i32);         // 4
+    let local: [i32; COLS] = [0; COLS];  // a constant in a local array's type
+    print(len(local) as i32);            // 4
+    return 0;
+}

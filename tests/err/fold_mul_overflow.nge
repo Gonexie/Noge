@@ -1,0 +1,2 @@
+// error: constant expression overflows 'i32'
+fn main() -> i32 { let x = 65536 * 65536; return 0; }

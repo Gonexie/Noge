@@ -1,0 +1,3 @@
+// error: only the "C" calling convention is supported
+extern "Rust" fn f();
+fn main() -> i32 { return 0; }

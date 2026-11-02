@@ -1,0 +1,3 @@
+// error: a constant must be an integer or bool, not '*mut u32'
+const P: *mut u32 = 0 as *mut u32;
+fn main() -> i32 { return 0; }

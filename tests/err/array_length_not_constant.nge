@@ -1,0 +1,2 @@
+// error: 'n' is a variable, but a compile-time constant is needed here
+fn main() -> i32 { let n = 4; var a: [u8; n]; return 0; }

@@ -8,6 +8,13 @@ build/nogec: $(SRC) src/noge.h src/ir.h
 
 test: build/nogec
 	@sh tests/run.sh build/nogec
+	@$(MAKE) --no-print-directory test-target
+
+# Firmware for a Cortex-M3, run under QEMU. Skipped (with a note) when the toolchain is not installed.
+test-target: build/nogec
+	@if command -v arm-none-eabi-gcc >/dev/null 2>&1 && command -v qemu-system-arm >/dev/null 2>&1; then \
+	    $(MAKE) --no-print-directory -C examples/cortex-m test; \
+	else echo "(skipping the Cortex-M tests: arm-none-eabi-gcc and qemu-system-arm are not installed)"; fi
 
 # Slower, independent check of the overflow / division / shift code against __int128 arithmetic.
 check-arith: build/nogec
@@ -16,4 +23,4 @@ check-arith: build/nogec
 clean:
 	rm -rf build
 
-.PHONY: test check-arith clean
+.PHONY: test test-target check-arith clean

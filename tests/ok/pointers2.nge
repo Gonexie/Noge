@@ -1,0 +1,63 @@
+// Pointer types in less common positions: pointers to pointers, in structs, as arguments and results,
+// compared, and cast between types; volatile access to bool and to pointer values.
+extern "C" fn calloc(count: usize, size: usize) -> *mut u8;
+extern "C" fn free(p: *mut u8);
+
+copy struct Node { value: i32, next: *mut Node }     // a pointer to the struct that contains it
+
+fn push(head: *mut Node, value: i32) -> *mut Node {
+    unsafe {
+        let n = calloc(1, 16) as *mut Node;          // room for a Node on any target
+        ptr_write(n, Node { value: value, next: head });
+        return n;
+    }
+}
+
+fn sum(head: *mut Node) -> i32 {
+    var total = 0;
+    var cur = head;
+    unsafe {
+        while cur != 0 as *mut Node {
+            let n = ptr_read(cur);
+            total = total + n.value;
+            cur = n.next;
+        }
+    }
+    return total;
+}
+
+fn main() -> i32 {
+    var head = 0 as *mut Node;
+    var i = 1;
+    while i <= 4 {
+        head = push(head, i * 10);
+        i = i + 1;
+    }
+    print(sum(head));                                // 100
+
+    unsafe {
+        // an array of pointers, and a pointer to a pointer
+        let slots = calloc(3, 8) as *mut *mut Node;  // room for three pointers on any target
+        ptr_write(slots, head);
+        ptr_write(ptr_offset(slots, 2), ptr_read(head).next);
+        let first: *mut Node = ptr_read(slots);
+        print(ptr_read(first).value);                // 40
+        let third = ptr_read(ptr_offset(slots, 2));
+        print(ptr_read(third).value);                // 30
+        print((ptr_read(ptr_offset(slots, 1)) == 0 as *mut Node) as i32);   // 1: calloc zeroed it
+
+        // volatile access to bool and to pointers
+        let flags = calloc(2, 1) as *mut bool;
+        volatile_write(flags, true);
+        print(volatile_read(flags) as i32 + volatile_read(ptr_offset(flags, 1)) as i32);   // 1
+        volatile_write(slots, first);
+        print((volatile_read(slots) == first) as i32);                      // 1
+
+        // const and mut pointers convert by cast
+        let ro = slots as *const *mut Node;
+        print((ptr_read(ro) == first) as i32);                              // 1
+        free(flags as *mut u8);
+        free(slots as *mut u8);
+    }
+    return 0;
+}

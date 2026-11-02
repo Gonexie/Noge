@@ -1,0 +1,2 @@
+// error: unknown type 'unit'
+fn main() -> i32 { let p: *mut unit = 0 as *mut u32; return 0; }

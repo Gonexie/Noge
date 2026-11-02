@@ -1,0 +1,121 @@
+// Real computation on the target, reported through semihosting: bit operations, checked 64-bit
+// arithmetic (a 32-bit CPU does these in software), arrays, and the size of usize.
+extern "C" fn semihost_puts(s: *const u8);
+extern "C" fn semihost_putbuf(s: [u8; 24]);   // an array is passed as a pointer to its first element
+extern "C" fn semihost_exit(code: i32);
+
+// Writes the decimal digits of n into buf, followed by a NUL.
+fn utoa(n: u64, buf: inout [u8; 24]) {
+    var tmp: [u8; 24] = [0; 24];
+    var digits: usize = 0;
+    var v = n;
+    if v == 0 {
+        tmp[0] = 48;
+        digits = 1;
+    }
+    while v > 0 {
+        tmp[digits] = (48 + v % 10) as u8;
+        digits = digits + 1;
+        v = v / 10;
+    }
+    var i: usize = 0;
+    while i < digits {
+        buf[i] = tmp[digits - 1 - i];
+        i = i + 1;
+    }
+    buf[digits] = 0;
+}
+
+fn say(label: *const u8, n: u64) {
+    var buf: [u8; 24] = [0; 24];
+    utoa(n, &buf);
+    unsafe {
+        semihost_puts(label);
+        semihost_putbuf(buf);
+        semihost_puts(c"\n");
+    }
+}
+
+fn fib(n: u32) -> u64 {
+    var a: u64 = 0;
+    var b: u64 = 1;
+    var i: u32 = 0;
+    while i < n {
+        let t = a + b;      // traps if it ever overflows
+        a = b;
+        b = t;
+        i = i + 1;
+    }
+    return a;
+}
+
+fn factorial(n: u64) -> u64 {
+    var r: u64 = 1;
+    var i: u64 = 2;
+    while i <= n {
+        r = r * i;
+        i = i + 1;
+    }
+    return r;
+}
+
+// The standard CRC-32 (the one in zip and Ethernet), bit by bit.
+fn crc32(data: [u8; 9]) -> u32 {
+    var crc: u32 = 0xFFFF_FFFF;
+    var i: usize = 0;
+    while i < len(data) {
+        crc = crc ^ (data[i] as u32);
+        var bit = 0;
+        while bit < 8 {
+            if crc & 1 == 1 {
+                crc = (crc >> 1) ^ 0xEDB8_8320;
+            } else {
+                crc = crc >> 1;
+            }
+            bit = bit + 1;
+        }
+        i = i + 1;
+    }
+    return ~crc;
+}
+
+fn sort(v: inout [u32; 8]) {
+    var i: usize = 0;
+    while i < len(v) {
+        var j: usize = 0;
+        while j + 1 < len(v) - i {
+            if v[j] > v[j + 1] {
+                let t = v[j];
+                v[j] = v[j + 1];
+                v[j + 1] = t;
+            }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+}
+
+fn main() -> i32 {
+    say(c"fib(90) = ", fib(90));
+    say(c"20! = ", factorial(20));
+    let msg: [u8; 9] = [49, 50, 51, 52, 53, 54, 55, 56, 57];
+    say(c"crc32 of 123456789 = ", crc32(msg) as u64);
+
+    var v: [u32; 8] = [9, 4, 7, 1, 8, 2, 6, 3];
+    sort(&v);
+    var checksum: u32 = 0;
+    var k: usize = 0;
+    while k < len(v) {
+        checksum = checksum + (k as u32 + 1) * v[k];
+        k = k + 1;
+    }
+    say(c"sorted checksum = ", checksum as u64);
+
+    let big: u32 = 4_000_000_000;
+    say(c"wrapping 4e9 + 4e9 = ", wrapping_add(big, big) as u64);
+    let zero: usize = 0;
+    say(c"largest usize = ", wrapping_sub(zero, 1) as u64);
+
+    unsafe { semihost_exit(0); }
+    return 0;
+}

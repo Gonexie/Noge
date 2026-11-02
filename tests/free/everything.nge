@@ -1,0 +1,36 @@
+// Arithmetic, arrays, structs, pointers, volatile access, externs and exports in one freestanding program.
+extern "C" fn board_led(on: bool);
+extern "C" fn board_delay(ms: u32);
+
+const GPIO: usize = 0x4001_1000;
+const STEPS: u32 = 6;
+
+struct Counter { n: u32, hist: [u32; 4] }
+
+fn reg_write(addr: usize, v: u32) {
+    unsafe { volatile_write(addr as *mut u32, v); }
+}
+
+fn reg_read(addr: usize) -> u32 {
+    unsafe { return volatile_read(addr as *const u32); }
+}
+
+export "C" fn tick(c: inout Counter) {
+    c.hist[c.n % 4] = reg_read(GPIO + 8);
+    c.n = c.n + 1;
+}
+
+fn main() -> i32 {
+    var c = Counter { n: 0, hist: [0; 4] };
+    var i: u32 = 0;
+    while i < STEPS {
+        reg_write(GPIO + 16, 1 << 13);
+        tick(&c);
+        unsafe {
+            board_led(i % 2 == 0);
+            board_delay(100);
+        }
+        i = i + 1;
+    }
+    return c.hist[1] as i32;
+}

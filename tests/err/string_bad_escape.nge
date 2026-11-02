@@ -1,0 +1,2 @@
+// error: unknown escape '\q' in string literal
+fn main() -> i32 { let s = c"a\qb"; return 0; }
