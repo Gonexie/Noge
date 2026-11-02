@@ -8,6 +8,7 @@ make              # builds build/nogec
 make test         # host tests, then the Cortex-M tests under QEMU if the ARM toolchain is installed
 make check-arith  # slower: the overflow/division/shift code and the constant folder, against __int128
 make check-match  # slower: random enums and match arms, against a brute-force model and a reference interpreter
+make check-generics  # slower: random generic programs, against the same programs with every instance written out
 make fuzz         # damaged programs must be rejected cleanly, never crash the compiler
 make -C examples/cortex-m test   # just the firmware (see examples/cortex-m/README.md)
 
@@ -50,7 +51,8 @@ fn main() -> i32 {
 }
 ```
 
-Items: `fn`, `struct`, `copy struct`, `enum`, `copy enum`, `const`, `extern "C" fn`, `export "C" fn`.
+Items: `fn`, `struct`, `copy struct`, `enum`, `copy enum` (any of the first five can be generic), `const`,
+`extern "C" fn`, `export "C" fn`.
 Types: `i8..i64`, `u8..u64`, `usize`, `isize`, `bool`, `struct` and `enum` (by value, nested), fixed arrays `[T; N]`,
 raw pointers `*mut T` and `*const T`. Statements: `let`, `var`, `if` / `else if` / `else`, `while`, `match`, `return`,
 assignment, `unsafe { }`. Expressions: arithmetic `+ - * / %`, bitwise `& | ^ ~ << >>`, comparison, `&& || !`, `as` casts (between
@@ -174,6 +176,74 @@ Not in this version: guards (`pattern if condition`), ranges (`1..5`), patterns 
 `if let` / `while let`, naming the whole value as well as its parts (`n @ Some(_)`), names inside `|`, and
 generic enums such as `Option<T>` (write `enum MaybeU32 { Some(u32), None }` for the type you need until generics
 arrive).
+
+## Generics
+
+A struct, enum or function can take parameters that stand for a type, or for a number such as an array length.
+Each use with particular arguments makes an *instance*: a copy of the declaration with the parameters replaced,
+which is checked exactly like code written by hand. So every safety check (types, moves, exclusivity, run-time
+checks) applies to every instance, and there is nothing generic left at run time.
+
+```
+copy enum Option<T> { Some(T), None }                  // T is a type
+copy struct Pair<A, B> { a: A, b: B }
+struct Ring<T, const N: usize> { items: [T; N], head: usize, count: usize }   // N is a number
+
+fn unwrap_or<T>(o: Option<T>, d: T) -> T {
+    return match o {
+        Option::Some(v) => v,
+        Option::None => d,
+    };
+}
+
+fn ring_new<T, const N: usize>(fill: T) -> Ring<T, N> {
+    return Ring { items: [fill; N], head: 0, count: 0 };
+}
+
+fn main() -> i32 {
+    let o = Option::Some(5);                  // an Option<i32>: T is worked out from the 5
+    print(unwrap_or(o, 9));                   // 5
+    let r: Ring<u8, 4> = ring_new(0);         // T and N come from the type the result is wanted as
+    let q = ring_new::<i32, 8>(0);            // or are written out
+    return 0;
+}
+```
+
+**Declaring.** `<T, U, const N: usize>` goes after the name of a `struct`, `enum` or `fn`. A `const` parameter has an
+integer type and can be used as an array length (`[T; N]`) and as a value (`return N;`). The types are used as
+`Option<i32>`, `Ring<u8, 4>`, `Pair<Option<u8>, bool>`; the numbers are a literal, a negative literal, or the name of a
+`const`.
+
+**Working out the arguments.** Nothing has to be written out when the compiler can tell, in this order:
+the arguments written with `::<...>` (the first few is enough, the rest are worked out); the type the result is
+wanted as (a `let` annotation, a field, a parameter, a `return`); the types of the arguments, where a plain number
+goes last and takes the type another argument has (`f(1, x)` with `x: u8` makes `T` a `u8`); the length of an array
+argument for `const N`. A value such as `Pair { a: 1, b: true }` or `Option::Some(5)` works out its own arguments
+the same way. When something cannot be told, the error says which parameter and what to write: `Option::<i32>::None`,
+`make::<u8>()`.
+
+**`copy`.** `copy struct Pair<A, B>` means: copy when `A` and `B` are, as for `#[derive(Copy)]` in Rust. So `Pair<i32, i32>`
+can be used again after `let q = p;`, and `Pair<Buf, i32>` moves like `Buf` does. A parameter of a generic function
+that is moved from has to be `sink`, as anywhere else.
+
+**Each instance is checked on its own.** There are no bounds (`T: Ord`): `a + b` inside a generic function is
+accepted for the types where it works and is an error for the others, and the error carries a note saying which
+instance and where it was asked for:
+
+```
+t.nge:3: error: operator '+' needs integer operands, found 'bool'
+  note: in 'add<bool>', which was asked for on line 7
+```
+
+A generic function that nothing calls is not checked at all. Instances are made on demand, once per distinct set of
+arguments; their names in the emitted C are `s3_Pair`, `e4_Option`, `f5_unwrap_or`.
+
+**Limits.** More than 20,000 instances, instances nested more than 48 deep, and types whose names would pass 2000
+characters are errors (they mean a generic function that calls itself with a bigger type each time). `main`, `extern`
+and `export` functions cannot be generic. A type cannot contain itself by value, generic or not.
+
+Not in this version: bounds and `where` clauses, default arguments, arithmetic in arguments (`Ring<T, N + 1>`), and a
+standard library: write the `Option<T>` you need, as above, until there are modules.
 
 ## Constants
 
@@ -307,8 +377,8 @@ On a 68,000-line generated program `nogec` takes about 0.25 s; compiling the 9.6
 - There are no global variables. Shared state between an interrupt handler and `main` lives in memory owned by C
   and is reached through a volatile pointer (see `examples/cortex-m/systick.nge`). Deciding how interrupt-shared
   state should be typed is still open.
-- Arena and handle types (`Arena<T, N>`, `Id<T>`) need generics (milestone 6). The pattern already works in plain code
-  (see `tests/ok/arena.nge`): a struct holding an array and a length, with integer indices.
+- Arena and handle types (`Arena<T, N>`, `Id<T>`) can now be written in the language (see `tests/ok/generics_arena.nge`),
+  but there is no standard library to ship them in.
 - The emitted C relies on what GCC and Clang do for things the C standard leaves implementation-defined:
   converting an out-of-range value to a signed type (`as`, and `<<`), `>>` of a negative value, and `__asm__`
   labels for the extern and export names. 16-bit targets (16-bit `int`) are not supported.
@@ -317,5 +387,5 @@ On a 68,000-line generated program `nogec` takes about 0.25 s; compiling the 9.6
 - `let x: T;` (assign later) is not supported, only `var x: T;`.
 - Recursion is not restricted yet.
 - The compiler stops at the first error, and the only backend is C.
-- Generics (so no `Option<T>` or `Arena<T, N>`), separate compilation. Patterns have no guards, ranges, struct
-  patterns, `if let` or `@` yet, and an enum cannot be passed to C.
+- Separate compilation, modules and a standard library (so no ready-made `Option<T>`; see Generics). Generics have
+  no bounds. Patterns have no guards, ranges, struct patterns, `if let` or `@` yet, and an enum cannot be passed to C.

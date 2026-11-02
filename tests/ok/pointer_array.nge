@@ -1,0 +1,7 @@
+// An array of raw pointers. The C name of the array type used to contain the '*' of the pointer's own name.
+fn main() -> i32 {
+    let names: [*const u8; 2] = [c"a", c"b"];
+    print(len(names) as i32);                        // 2
+    unsafe { print(ptr_read(names[1]) as i32); }     // 'b' is 98
+    return 0;
+}

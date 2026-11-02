@@ -1,0 +1,30 @@
+// Declaration order does not matter: plain types that hold generic instances of types declared further down, and
+// the other way round, and an instance that points to itself.
+struct Early { p: Pair<Late, i32>, o: Option<Later> }
+
+copy struct Pair<A, B> { a: A, b: B }
+copy enum Option<T> { Some(T), None }
+copy struct Late { x: i32 }
+copy struct Later { y: u8 }
+
+struct Holder<T> { items: [T; 2], next: *mut Holder<T> }
+struct Wrap<T> { h: Holder<Late>, t: T }
+
+fn first<T>(h: Holder<T>) -> T { return h.items[0]; }
+fn second<T>(h: Holder<T>) -> T { return h.items[1]; }
+
+fn main() -> i32 {
+    let e = Early { p: Pair { a: Late { x: 3 }, b: 4 }, o: Option::Some(Later { y: 5 }) };
+    print(e.p.a.x);                       // 3
+    print(e.p.b);                         // 4
+    match e.o {
+        Option::Some(l) => { print(l.y as i32); }     // 5
+        Option::None => { print(0); }
+    }
+    let h = Holder { items: [Late { x: 1 }, Late { x: 2 }], next: 0 as *mut Holder<Late> };
+    print(first(h).x);                    // 1
+    print(second(h).x);                   // 2
+    let w = Wrap { h: h, t: true };
+    if w.t { print(w.h.items[1].x); }     // 2
+    return 0;
+}

@@ -1,0 +1,46 @@
+// Generics in a freestanding build: instances are plain types and functions, so the object needs nothing from the C library.
+extern "C" fn board_report(code: i32);
+
+copy enum Option<T> { Some(T), None }
+struct Ring<T, const N: usize> { items: [T; N], head: usize, count: usize }
+
+fn ring_new<T, const N: usize>(fill: T) -> Ring<T, N> {
+    return Ring { items: [fill; N], head: 0, count: 0 };
+}
+
+fn ring_push<T, const N: usize>(r: inout Ring<T, N>, v: T) -> bool {
+    if r.count == N { return false; }
+    r.items[(r.head + r.count) % N] = v;
+    r.count = r.count + 1;
+    return true;
+}
+
+fn ring_pop<T, const N: usize>(r: inout Ring<T, N>) -> Option<T> {
+    if r.count == 0 { return Option::None; }
+    let v = r.items[r.head];
+    r.head = (r.head + 1) % N;
+    r.count = r.count - 1;
+    return Option::Some(v);
+}
+
+fn main() -> i32 {
+    var r: Ring<u32, 4> = ring_new(0);
+    var small = ring_new::<u8, 2>(0);
+    ring_push(&r, 5);
+    ring_push(&r, 6);
+    ring_push(&small, 200);
+    var sum: u32 = 0;
+    var go = true;
+    while go {
+        match ring_pop(&r) {
+            Option::Some(v) => { sum = sum + v; }
+            Option::None => { go = false; }
+        }
+    }
+    match ring_pop(&small) {
+        Option::Some(v) => { sum = sum + (v as u32); }
+        Option::None => { }
+    }
+    unsafe { board_report(sum as i32); }
+    return sum as i32;
+}

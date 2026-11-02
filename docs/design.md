@@ -101,7 +101,8 @@ Notes
 3. Arrays, bounds checks, overflow traps, an IR with a fixed evaluation order. **Done** (see below). Arena/handle types moved to the generics milestone.
 4. C FFI with `unsafe`; build a blinky for a real target (e.g. ARM Cortex-M via arm-none-eabi-gcc). **Done** on an emulated Cortex-M3 (see below); not yet run on a physical board.
 5. Enums and pattern matching. **Done** (see below).
-6. Generics (and with them `Option<T>`, `Arena<T, N>`, `Id<T>`), then separate compilation.
+6. Generics (`Option<T>`, `Arena<T, N>`, `Id<T>` can now be written in the language). **Done** (see below).
+7. Separate compilation, modules and a standard library.
 
 ## Decisions made in milestone 2
 
@@ -291,10 +292,81 @@ holding bool, integer and enum values, so moves of non-`copy` values, structs in
 scrutinees are covered by hand-written tests only; and the exhaustiveness search is exponential in the worst case,
 which the shortcut above avoids for rows that fit everything but not for every contrived set of patterns.
 
+## Decisions made in milestone 6
+
+- **A generic declaration is a template, and each use makes an instance by copying it.** The checker copies the
+  declaration's tree with the parameters replaced (a type parameter by the argument type, a const parameter by a
+  constant of its own type), registers the copy as an ordinary struct, enum or function, appends it to the program
+  and checks it like code written by hand. Everything after the checker (moves, exclusivity, lowering, C) sees only
+  plain declarations, and the generic templates are dropped from the program before they get there. This is the
+  cheapest design that keeps every safety check on every instance, and it needs no run-time support at all.
+- **No bounds.** Because each instance is checked after substitution, `a + b` inside a generic function works for
+  the types it works for and is an error for the others, reported with a note naming the instance and the line that
+  asked for it (`in 'add<bool>', which was asked for on line 7`). Real bounds need a trait system; that is a design
+  of its own, and nothing in the language so far needs it. The price: an error in generic code shows up at a use,
+  and a generic function nothing calls is never checked. (`T: Foo` is rejected with a message that says so.)
+- **Instances are shared by their arguments.** One instance per distinct set of arguments (types by identity, which
+  is canonical because arrays, pointers and instances are interned; const values by value), so `Option<i32>` is one
+  type everywhere. Their C names are `s<id>_Name`, `e<id>_Name` and `f<id>_name`: a user name cannot start with a
+  digit, so these cannot clash with `s_Name`, `e_Name`, `f_name`.
+- **Const parameters are integers, and they are constants with a type of their own.** `const N: usize` replaced
+  inside the copy by a literal that keeps its declared type, rather than adapting to its context like `5`, so
+  `let x: u8 = N;` is an error exactly as it would be for a `const`. A name that is also a const parameter cannot be
+  used for a variable in the same declaration. Arguments are a number, a negative number or the name of a `const`;
+  arithmetic in arguments (`N + 1`) is left out, since it makes inference an equation problem.
+- **Where the arguments come from, in order:** the ones written out (`f::<i32>(x)`, `Option::<i32>::None`,
+  `Pair::<u8, i64> { .. }`; a prefix is enough); the type the result is wanted as; the types of the arguments, with
+  plain numbers last so another argument can decide their type; the length of an array argument for a const
+  parameter. The expected type could be a loose hint in some compilers; here every place that passes one demands
+  exactly that type afterwards, so using it first can only move an error earlier. A value is checked once: its type
+  is remembered and compared with the instance's signature, not checked a second time.
+- **`copy` on a generic type is conditional.** An instance is copy when the declaration says `copy` and every value
+  it holds is copy, as with `#[derive(Copy)]`. Otherwise `Option<T>` could not be copy for `i32` and move-only for a
+  buffer from one declaration. A plain `copy struct` with a non-copy field is still an error.
+- **Instances wait for the plain types.** An instance made while the fields of ordinary structs are still being
+  resolved (a struct that holds `Pair<Later, i32>` with `Later` declared further down) is only checked for containing
+  itself and laid out once everything it can reach has its field types; the same holds for instances that make
+  other instances. Declaration order therefore never matters (`tests/ok/generics_order.nge`).
+- **Limits** keep a function that calls itself with a bigger type each time from running forever: a type whose name
+  would pass 2000 characters, instances nested more than 48 deep, more than 20,000 instances. In practice the first
+  one stops it. A program with 3,000 instances compiles in 0.1 s.
+- **Syntax.** `<` after a name is a list of arguments in a type, unless the name is a primitive: `x as i32 < y` stays
+  a comparison. In expressions arguments need the turbofish (`name::<..>`), as in Rust. `>>` closes two lists.
+- **Fixed while doing this:** the C name of an array of pointers, `[*const u8; 2]`, contained the `*`, so the
+  program did not compile; array and pointer type names are now built from the element's C name
+  (`tests/ok/pointer_array.nge`).
+
+### How milestone 6 was checked
+
+- **Tests.** 10 programs that must run (`tests/ok/generics_*.nge` and `pointer_array.nge`, results worked out by
+  hand), 40 that must be rejected (`tests/err/generic_*.nge`, each message read to confirm it fires for the reason
+  intended), one freestanding, and the ring buffer in `examples/cortex-m/machine.nge`, run under QEMU at `-O0` to
+  `-O3`, `-Os` and with `--no-builtins` (a 32-bit `usize` as a const parameter).
+- **A differential test** (`tests/generics_check.py`, `make check-generics`): random programs over a small library
+  of generic types and functions (a pair, an optional value, an array whose length is a const parameter, a wrapper,
+  functions with `match`, loops, `if`/`else` and `inout` parameters), with random type arguments, written once
+  generic and once with every instance expanded by hand into plain declarations. Both must compile warning-free and
+  print the same. More than 7,000 programs agree.
+- **Mutation testing.** 24 deliberate bugs in the generics code, one at a time: 23 are caught (17 by the
+  differential test, 6 by the ordinary tests). One was missed at first, an else branch shared between instances,
+  because the generator's else branch did not depend on a parameter; it now does, and the bug is caught. The last
+  is harmless: checking the arguments of a generic call a second time changes nothing.
+- **Sanitizers and fuzzing.** The whole suite, both differential tests and 15,000 damaged programs (which now
+  include the generic ones) were run through a compiler built with AddressSanitizer and UBSanitizer: no memory error
+  and no crash.
+
+What this does **not** show: generic code that nothing instantiates is not checked at all; the random programs use
+`copy` types only, so moves through generics rest on hand-written tests; nothing ran on real hardware; clang's
+sanitizers were not installed here; and there are no bounds, so a generic function says what it needs only through
+the error at a use.
+
 ## Open questions
 - Do we need Hylo-style `subscript` projections to access into containers without copying, or is `inout` on paths plus arenas enough?
 - Copy vs move default for small structs, and for plain enums: `copy enum Color { .. }` has to be written, and
   nearly every enum without values is wanted that way.
+- Bounds on generic parameters (`T: Ord`), which would let generic code be checked once instead of per instance,
+  and would need a trait or interface mechanism.
+- Arithmetic in generic arguments (`Ring<T, N + 1>`).
 - Integer patterns: ranges (`0..=9`) and a check that a `match` on a `u8` with all 256 literals is exhaustive.
 - Guards (`pattern if cond`) and `if let`: wait for a program that is clumsy without them.
 - A `switch` on the tag in the generated C for the common simple `match`.

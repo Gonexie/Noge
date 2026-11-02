@@ -24,6 +24,10 @@ check-arith: build/nogec
 check-match: build/nogec
 	python3 tests/match_check.py build/nogec
 
+# Random generic programs, against the same programs with every instance written out by hand.
+check-generics: build/nogec
+	python3 tests/generics_check.py build/nogec
+
 # Damaged programs must be rejected with a message, never crash the compiler. Build nogec with
 # -fsanitize=address,undefined (see the top of tests/fuzz.py) to make memory errors visible too.
 fuzz: build/nogec
@@ -32,4 +36,4 @@ fuzz: build/nogec
 clean:
 	rm -rf build
 
-.PHONY: test test-target check-arith check-match fuzz clean
+.PHONY: test test-target check-arith check-match check-generics fuzz clean

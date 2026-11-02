@@ -42,7 +42,9 @@ expect systick "ten ticks counted by the handler" 0
 
 expect machine "stack machine result = -40
 green ticks = 12
-red ticks = 20" 0
+red ticks = 20
+ring pushed = 4
+ring total = 1000" 0
 
 expect blinky "blinky: six half-periods" 0
 # The registers the blinky touched, in order: clock enable, pin configuration, then six LED changes

@@ -672,8 +672,8 @@ static Type *subst_type(Bind *b, Node *pat) {
  * pats[i] is the written type the template gives value i, exprs[i] the expression, and pre[i] gets its type.
  * Values that are plain numbers go last, so another value can decide their type: f(1, x) with x a u8. */
 static void infer_values(Bind *b, Node **pats, Node **exprs, int nv, Type **pre, Node *ret_pat, Type *expect) {
+    if (ret_pat && expect) unify(b, ret_pat, expect, true); /* the type the result is wanted as fills what is still open */
     for (int pass = 0; pass < 2; pass++) {
-        if (pass == 1 && ret_pat && expect) unify(b, ret_pat, expect, true); /* what the arguments left open */
         for (int i = 0; i < nv; i++) {
             if (is_lit(exprs[i]) != (pass == 1)) continue;
             Type *want = subst_type(b, pats[i]);

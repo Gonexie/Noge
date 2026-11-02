@@ -21,7 +21,7 @@ qemu-system-arm`). From the repository root, `make test` runs these tests too wh
 | `checks.nge`   | CRC-32, 64-bit arithmetic with overflow checks, a sort, `usize` being 32 bits                    |
 | `systick.nge`  | an interrupt handler written in Noge (`export "C" fn SysTick_Handler`)                           |
 | `trap.nge`     | a failed bounds check on the device: the hook reports the kind and the source line               |
-| `machine.nge`  | enums and `match`: a stack machine whose program is an array of instructions, and a traffic light |
+| `machine.nge`  | enums, `match` and generics: a stack machine, a traffic light, and a ring buffer whose size is a type parameter |
 
 ## The files
 

@@ -122,6 +122,30 @@ fn duration(l: Light) -> u32 {
     };
 }
 
+// ---- a generic ring buffer: its size is part of its type (and usize is 32 bits wide here)
+
+copy enum Option<T> { Some(T), None }
+struct Ring<T, const N: usize> { items: [T; N], head: usize, count: usize }
+
+fn ring_new<T, const N: usize>(fill: T) -> Ring<T, N> {
+    return Ring { items: [fill; N], head: 0, count: 0 };
+}
+
+fn ring_push<T, const N: usize>(r: inout Ring<T, N>, v: T) -> bool {
+    if r.count == N { return false; }
+    r.items[(r.head + r.count) % N] = v;
+    r.count = r.count + 1;
+    return true;
+}
+
+fn ring_pop<T, const N: usize>(r: inout Ring<T, N>) -> Option<T> {
+    if r.count == 0 { return Option::None; }
+    let v = r.items[r.head];
+    r.head = (r.head + 1) % N;
+    r.count = r.count - 1;
+    return Option::Some(v);
+}
+
 fn main() -> i32 {
     // ((2 + 3) * 4), negated, doubled
     let program = [Op::Push(2), Op::Push(3), Op::Add, Op::Push(4), Op::Mul,
@@ -148,6 +172,24 @@ fn main() -> i32 {
     }
     say(c"green ticks = ", greens as i32);
     say(c"red ticks = ", reds as i32);
+
+    var ring: Ring<u16, 4> = ring_new(0);
+    var pushed: u32 = 0;
+    var item: u16 = 100;
+    while item < 600 {                    // five values: the fifth does not fit
+        if ring_push(&ring, item) { pushed = pushed + 1; }
+        item = item + 100;
+    }
+    var total: u32 = 0;
+    var more = true;
+    while more {
+        match ring_pop(&ring) {
+            Option::Some(x) => { total = total + (x as u32); }
+            Option::None => { more = false; }
+        }
+    }
+    say(c"ring pushed = ", pushed as i32);
+    say(c"ring total = ", total as i32);
 
     unsafe { semihost_exit(0); }
     return 0;
