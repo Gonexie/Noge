@@ -11,6 +11,7 @@
 #   free/*.nge  built with --freestanding as a -ffreestanding object that must not need stdio or exit
 #
 # ok/, trap/ and ffi/ run twice: with __builtin_*_overflow, and with --no-builtins (portable C99 checks).
+# If clang is installed, ok/ and trap/ are also compiled with it as a second opinion.
 NOGEC=${1:-build/nogec}
 CC=${CC:-cc}
 tmp=$(mktemp -d)
@@ -86,6 +87,20 @@ for f in tests/free/*.nge; do
         pass=$((pass + 1))
     fi
 done
+
+# A second opinion: where clang is installed, the emitted C must be warning-free there too (compile only).
+if command -v clang >/dev/null 2>&1; then
+    for f in tests/ok/*.nge tests/trap/*.nge; do
+        [ -e "$f" ] || continue
+        b=$(basename "$f" .nge)
+        "$NOGEC" -o "$tmp/$b.clang.c" "$f" 2>"$tmp/err" || continue
+        if clang -std=c99 -Wall -Wextra -Wpedantic -Werror -c -o "$tmp/$b.clang.o" "$tmp/$b.clang.c" 2>"$tmp/err"; then
+            pass=$((pass + 1))
+        else
+            failed "$f: clang does not accept the emitted C cleanly" "$tmp/err"
+        fi
+    done
+fi
 
 for f in tests/err/*.nge; do
     [ -e "$f" ] || continue

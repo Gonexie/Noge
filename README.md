@@ -122,6 +122,10 @@ prints `file:line: runtime error: ...` and exits with status 101.
 `usize` is as wide as the target's pointers, so `--ptr-bits` must match the C compiler you build the output with.
 Only 32- and 64-bit pointers are supported.
 
+The emitted C is warning-free under `-Wall -Wextra -Wpedantic` with GCC 11, 12 and 13 and with clang 18; the test
+suite builds it with clang as well when clang is installed. The compiler itself needs GCC or clang (it uses
+`__builtin_*_overflow`).
+
 In a freestanding build a failed check calls `noge_trap_hook(kind, line)` (1 overflow, 2 division by zero,
 3 index out of bounds, 4 shift), which your board code may define; the weak default loops forever. In a hosted build
 define `NOGE_TRAP(kind, line)` instead, for example
