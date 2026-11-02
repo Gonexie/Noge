@@ -19,6 +19,7 @@ typedef struct IrVar {
     bool is_temp;
     bool by_ptr;   /* the C variable is a pointer to the value (inout / set / aggregate let) */
     bool is_const; /* ... to const (a `let` parameter) */
+    const char *gname; /* a static: its name in C (the variable is a file-level one) */
 } IrVar;
 
 typedef struct {

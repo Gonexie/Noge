@@ -1,0 +1,16 @@
+import "lib.nge" as lib;
+
+static mut COUNT: u32 = 100;       // not lib's COUNT
+
+fn main() -> i32 {
+    lib::bump();
+    lib::bump();
+    unsafe {
+        print(lib::COUNT as i32);  // 2
+        print(COUNT as i32);       // 100
+    }
+    print(lib::TABLE[0]);          // 4
+    print(lib::hidden());          // 9
+    print(lib::second(true));      // 5
+    return 0;
+}

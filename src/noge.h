@@ -129,7 +129,9 @@ typedef enum {
     /* a generic parameter of a declaration: `T`, or `const N: usize` */
     N_TPARAM,
     /* import "file.nge" as name;  (removed again when the files are loaded) */
-    N_IMPORT
+    N_IMPORT,
+    /* static [mut] [volatile] NAME: T = initial value;  (op: mut, flag: volatile) */
+    N_STATIC
 } NodeKind;
 
 /* N_PAT: what a pattern is */

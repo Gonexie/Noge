@@ -1,0 +1,1 @@
+static mut SECRET: i32 = 3;

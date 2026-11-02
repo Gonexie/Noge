@@ -104,6 +104,7 @@ Notes
 6. Generics (`Option<T>`, `Arena<T, N>`, `Id<T>` can now be written in the language). **Done** (see below).
 7. Modules and a standard library. **Done** (see below).
 8. Separate compilation: one C file per module, rebuilt only when it changes. **Done** (see below).
+9. Global state: `static`, `static mut`, `static mut volatile`. **Done** (see below).
 
 ## Decisions made in milestone 2
 
@@ -486,6 +487,53 @@ What this does **not** show: the speed-up depends on a change staying inside one
 everything), parallel builds were not measured (the runner passes `-j`), no other `make` than GNU make was tried, and
 nothing ran on real hardware.
 
+## Decisions made in milestone 9
+
+Milestone 9 was not in the original plan; of the open questions, global state was chosen because nearly every embedded
+program needs it and the only answer so far (memory owned by C, reached through a volatile pointer) was clumsy.
+
+- **Three kinds, one rule: unsafety follows what can change.** `static` is read-only data and safe to read anywhere;
+  `static mut` can be changed and every use is `unsafe`, as the compiler cannot see who else touches it; `static mut
+  volatile` is the same with a C `volatile` variable, for state an interrupt handler shares. `volatile` is explicit
+  and not the default for `static mut`: most mutable statics are not shared with a handler, and a volatile
+  aggregate cannot be passed by address in C without losing the qualifier. Without it a wait loop is optimized into
+  an endless one (the SysTick firmware was checked to hang at `-O2` with the keyword removed).
+- **The type must be `copy`.** Reading then copies, so there is no moving out of a global, no "moved" state to track, and
+  the flow pass can treat a place rooted in a static as always set and never moved. Overlapping borrows are not checked
+  for statics either (a handler can run at any moment, so no static analysis of one function is right); `unsafe` carries
+  that.
+- **The initial value is data**, checked as a constant expression and then restricted to numbers, bools, struct, array
+  and enum values (no casts, so no pointers yet): it is written as a C initializer, `{0}` when it is all zero bits and
+  every element otherwise. `static` becomes a `const` C object, so it is placed in flash.
+- **Statics share the namespace of constants** (one name is one of them, not both) and are found the same way, with
+  `pub` and `module::NAME`; their C names carry the module like functions' do (`g_NAME`, `gm<tag>_NAME`). With
+  `--emit-dir` the header declares them `extern` and the owning module's file defines them.
+- **A static is not a constant**: it cannot be used where a compile-time value is needed (array lengths, other
+  initializers, `const`), but `len(TABLE)` is a constant since the length comes from the type.
+- **A `static mut` given to a `let` array or struct parameter is copied first**, as a `let` argument is by value in the
+  language: the callee is entitled to a value that does not change under it. For an immutable static the address is
+  passed, which is the same thing and costs nothing.
+- **Not done:** pointers and anything needing a cast in an initial value, `static` inside a function, and a type that
+  makes sharing with a handler safe.
+
+### How milestone 9 was checked
+
+- **Tests.** A positive program with every kind of static (numbers, arrays, nested arrays through `len`, structs, enums,
+  `static mut`, `volatile`, a repeated nonzero value, a variant that is not all zero bits, a `let` argument that must
+  keep its value), a multi-file one (public, private and same-named statics, a generic function reading a static of its
+  own file), a failed bounds check on a static array, 19 and 2 programs that must be rejected, and the SysTick firmware,
+  which now keeps its tick counter in a `static mut volatile`, under QEMU at `-O0` to `-O3`, `-Os` and with
+  `--no-builtins`. The split-in-two and the separate-C-files tests include the new programs.
+- **Mutation testing.** 11 deliberate bugs (unsafe not required; an immutable static assignable; a non-copy type or any
+  expression accepted; a static usable in a constant; a volatile one passable by address; a `static mut` argument not
+  copied; a variant taken for all zero bits; a repeated value written once; other files not told about a static; a
+  static tracked like a local): one survived the first run (the repeated value, since the test only read zeros and
+  overwritten values) and has a test now; all 11 are caught.
+
+What this does **not** show: `volatile` was checked for the one case that matters (a counter written by SysTick on QEMU), not
+for other peripherals or multi-core use; nothing ran on real hardware; and the flow pass deliberately says nothing about
+how statics are used.
+
 ## Open questions
 - Do we need Hylo-style `subscript` projections to access into containers without copying, or is `inout` on paths plus arenas enough?
 - Copy vs move default for small structs, and for plain enums: `copy enum Color { .. }` has to be written, and
@@ -497,8 +545,8 @@ nothing ran on real hardware.
 - Integer patterns: ranges (`0..=9`) and a check that a `match` on a `u8` with all 256 literals is exhaustive.
 - Guards (`pattern if cond`) and `if let`: wait for a program that is clumsy without them.
 - A `switch` on the tag in the generated C for the common simple `match`.
-- Interrupt handlers and shared state with main code: `export "C"` handlers and C-owned memory work today, but a
-  typed answer (global `static`s, a `Volatile<T>` or critical-section type) is still to be designed.
+- Interrupt handlers and shared state with main code: `static mut volatile` works, unsafely; a typed answer (a
+  critical-section or atomic type that makes sharing safe) is still to be designed.
 - A safe way to hand C a pointer to a Noge buffer that outlives one call (today only extern parameter modes, for
   the duration of the call).
 - A pointer-to-first-element intrinsic for arrays (`as_ptr`) would shorten C string and buffer code, at the price of

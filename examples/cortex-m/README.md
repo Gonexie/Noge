@@ -19,7 +19,7 @@ qemu-system-arm`). From the repository root, `make test` runs these tests too wh
 | `blinky.nge`   | toggles PC13 by writing the GPIO and SysTick registers; the whole point of the language          |
 | `hello.nge`    | a `c"..."` string passed to C                                                                    |
 | `checks.nge`   | CRC-32, 64-bit arithmetic with overflow checks, a sort, `usize` being 32 bits                    |
-| `systick.nge`  | an interrupt handler written in Noge (`export "C" fn SysTick_Handler`)                           |
+| `systick.nge`  | an interrupt handler written in Noge (`export "C" fn SysTick_Handler`) sharing a `static mut volatile` with `main` |
 | `trap.nge`     | a failed bounds check on the device: the hook reports the kind and the source line               |
 | `machine.nge`  | enums, `match` and generics: a stack machine, a traffic light, and a ring buffer whose size is a type parameter |
 

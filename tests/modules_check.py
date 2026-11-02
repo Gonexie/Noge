@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 NOGEC = sys.argv[1] if len(sys.argv) > 1 else "build/nogec"
 CC = os.environ.get("CC", "cc").split()
-STARTS = re.compile(r"^(pub\s+)?(fn|struct|enum|copy|const|extern|export)\b")
+STARTS = re.compile(r"^(pub\s+)?(fn|struct|enum|copy|const|static|extern|export)\b")
 
 
 def items(text):

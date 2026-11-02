@@ -1,9 +1,11 @@
-// An interrupt handler written in Noge. `export "C"` gives the function the plain C name SysTick_Handler,
-// which replaces the weak default in the vector table (startup.c). The tick counter is owned by C
-// (board_qemu.c) and shared through a volatile pointer.
-extern "C" fn board_ticks() -> *mut u32;
+// An interrupt handler written in Noge. `export "C" fn` gives the function the plain C name SysTick_Handler,
+// which replaces the weak default in the vector table (startup.c). The tick counter is a static of this program: a
+// `static mut volatile`, so that the main program's loop reads it again each time round instead of keeping it in a
+// register. Using a `static mut` is unsafe, as it is shared with code that can run at any moment.
 extern "C" fn semihost_puts(s: *const u8);
 extern "C" fn semihost_exit(code: i32);
+
+static mut volatile TICKS: u32 = 0;
 
 const SYST_CSR: usize = 0xE000_E010;
 const SYST_RVR: usize = 0xE000_E014;
@@ -14,10 +16,7 @@ fn reg_write(addr: usize, value: u32) {
 }
 
 export "C" fn SysTick_Handler() {
-    unsafe {
-        let t = board_ticks();
-        volatile_write(t, volatile_read(t) + 1);
-    }
+    unsafe { TICKS = TICKS + 1; }
 }
 
 fn main() -> i32 {
@@ -25,8 +24,7 @@ fn main() -> i32 {
     reg_write(SYST_CVR, 0);
     reg_write(SYST_CSR, 0b111);          // enabled, CPU clock, interrupt on every wrap
     unsafe {
-        let t = board_ticks();
-        while volatile_read(t) < 10 { }  // wait for the handler to count ten
+        while TICKS < 10 { }             // wait for the handler to count ten
         semihost_puts(c"ten ticks counted by the handler\n");
         semihost_exit(0);
     }

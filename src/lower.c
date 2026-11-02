@@ -145,11 +145,49 @@ static void add_proj(IrPlace *p, Node *field, Operand idx) {
 
 static Operand lower_expr(Node *n);
 
+/* A static is one variable of the whole program: the same IrVar every time, named for C. */
+static struct { Node *decl; IrVar *var; } *static_vars;
+static int n_static_vars, cap_static_vars;
+
+static IrVar *static_var(Node *d) {
+    for (int i = 0; i < n_static_vars; i++)
+        if (static_vars[i].decl == d) return static_vars[i].var;
+    if (n_static_vars == cap_static_vars) {
+        cap_static_vars = cap_static_vars ? cap_static_vars * 2 : 16;
+        void *bigger = zalloc(sizeof *static_vars * (size_t)cap_static_vars);
+        if (n_static_vars) memcpy(bigger, static_vars, sizeof *static_vars * (size_t)n_static_vars);
+        static_vars = bigger;
+    }
+    IrVar *v = ARENA_NEW(&g_arena, IrVar);
+    v->id = -1;
+    v->type = d->type;
+    v->name = d->name;
+    char *c = arena_alloc(&g_arena, (size_t)d->name.n + 24);
+    if (d->mod == 0) snprintf(c, (size_t)d->name.n + 24, "g_%.*s", SF(d->name));
+    else snprintf(c, (size_t)d->name.n + 24, "gm%s_%.*s", g_modules[d->mod]->tag, SF(d->name));
+    v->gname = c;
+    static_vars[n_static_vars].decl = d;
+    static_vars[n_static_vars].var = v;
+    n_static_vars++;
+    return v;
+}
+
+static bool is_static_name(const Node *n) { return n->kind == N_NAME && n->decl && n->decl->kind == N_STATIC; }
+
+/* the variable a name stands for */
+static IrVar *name_var(Node *n) { return is_static_name(n) ? static_var(n->decl) : vars[n->local]; }
+
+/* the static a place starts at, if it does */
+static Node *static_root(Node *n) {
+    while (n->kind == N_MEMBER || n->kind == N_INDEX) n = n->a;
+    return is_static_name(n) ? n->decl : NULL;
+}
+
 static IrPlace lower_place(Node *n) {
     IrPlace p = {0};
     switch (n->kind) {
     case N_NAME:
-        p.base = vars[n->local];
+        p.base = name_var(n);
         p.type = n->type;
         return p;
     case N_MEMBER:
@@ -195,7 +233,8 @@ static Operand lower_call(Node *n) {
             g->place = lower_place(a->a);
         } else if (p->op == M_LET && is_aggregate(p->type)) { /* borrowed: pass its address */
             g->addr = true;
-            if (is_place(a)) {
+            Node *sr = static_root(a);
+            if (is_place(a) && !(sr && sr->op)) {
                 g->place = lower_place(a);
             } else {
                 IrVar *v = to_var(lower_expr(a), a->line);
@@ -559,6 +598,7 @@ static Operand lower_expr(Node *n) {
     case N_BOOL:
         return op_const(ty_bool, n->ival);
     case N_NAME:
+        if (is_static_name(n)) return load_place(n); /* a static is read where it is, once */
         if (!vars[n->local]->by_ptr) return op_var(vars[n->local]); /* use the variable itself */
         return load_place(n);                                       /* a pointer parameter: read through it */
     case N_MEMBER:

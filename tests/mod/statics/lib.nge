@@ -1,0 +1,19 @@
+// Statics in another file: public ones are reached as lib::NAME, private ones only from here, and the same name in
+// two files is two variables.
+pub static TABLE: [i32; 3] = [4, 5, 6];
+pub static mut COUNT: u32 = 0;
+static mut HIDDEN: i32 = 7;
+
+pub fn bump() {
+    unsafe {
+        COUNT = COUNT + 1;
+        HIDDEN = HIDDEN + 1;
+    }
+}
+
+pub fn hidden() -> i32 {
+    unsafe { return HIDDEN; }
+}
+
+// generic code that reads a static of its own file, used from another
+pub fn second<T>(x: T) -> i32 { return TABLE[1]; }

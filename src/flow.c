@@ -258,8 +258,15 @@ static void move_place(Node *n, Place p) {
     set_range(p.lo, p.hi, LS_MOVED);
 }
 
+/* a name that is a static: global state is not tracked (it is always set, and a copy type is never moved) */
+static bool root_is_global(Node *n) {
+    while (n->kind == N_MEMBER || n->kind == N_INDEX) n = n->a;
+    return n->kind == N_NAME && n->decl && n->decl->kind == N_STATIC;
+}
+
 static void use_place(Node *n, bool consume) {
     path_exprs(n);
+    if (root_is_global(n)) return;
     Place p = place_of(n);
     check_init(n, p);
     if (consume && !n->type->is_copy) move_place(n, p);
@@ -269,6 +276,7 @@ static void use_place(Node *n, bool consume) {
 /* Borrow a place for the rest of the enclosing call. */
 static void place_borrow(Node *n, bool write, bool need_init) {
     path_exprs(n);
+    if (root_is_global(n)) return;
     Place p = place_of(n);
     if (need_init || p.idx) check_init(n, p); /* an element can only be reached in a whole array */
     start_borrow(n, p, write);
@@ -314,7 +322,7 @@ static void pattern_bind(Node *p, bool *moves) {
  * it out of the scrutinee (an enum is one unit, so the whole thing is gone afterwards). */
 static void do_match(Node *m) {
     Node *scrut = m->a;
-    bool is_pl = is_place(scrut);
+    bool is_pl = is_place(scrut) && !root_is_global(scrut);
     Place sp = {0};
     if (is_pl) {
         path_exprs(scrut);
@@ -370,7 +378,7 @@ static void call(Node *n) {
     nlive = base; /* the call is over: its borrows end */
     p = fn->a;
     for (Node *a = n->a; a; a = a->next, p = p->next)
-        if (p->op == M_SET) {
+        if (p->op == M_SET && !root_is_global(a->a)) {
             Place pl = place_of(a->a);
             if (!pl.idx) set_range(pl.lo, pl.hi, LS_INIT);
         }
@@ -447,6 +455,7 @@ static void stmt(Node *s) {
     case N_ASSIGN: {
         expr(s->b, true); /* right side first, then the place */
         path_exprs(s->a);
+        if (root_is_global(s->a)) break;
         Place p = place_of(s->a);
         if (p.idx) check_init(s->a, p); /* writing an element needs a whole array */
         else set_range(p.lo, p.hi, LS_INIT); /* writing a variable or field (re)initializes it */

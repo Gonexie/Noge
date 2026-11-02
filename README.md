@@ -54,7 +54,7 @@ fn main() -> i32 {
 }
 ```
 
-Items: `fn`, `struct`, `copy struct`, `enum`, `copy enum` (any of the first five can be generic), `const`,
+Items: `fn`, `struct`, `copy struct`, `enum`, `copy enum` (any of the first five can be generic), `const`, `static`,
 `extern "C" fn`, `export "C" fn`, and `import` of another file. Any item can be marked `pub`.
 Types: `i8..i64`, `u8..u64`, `usize`, `isize`, `bool`, `struct` and `enum` (by value, nested), fixed arrays `[T; N]`,
 raw pointers `*mut T` and `*const T`. Statements: `let`, `var`, `if` / `else if` / `else`, `while`, `match`, `return`,
@@ -338,6 +338,46 @@ order and can be array lengths, so `[u8; BUF_LEN * 2]` works. More generally, **
 and constants is computed by the compiler**, with the same rules as at run time: `255 + 1` as a `u8`, `5 / (1 - 1)`,
 `1 << 40` as an `i32` or an array index that is certainly out of range are compile errors.
 
+## Statics
+
+`static NAME: T = value;` is a global variable. Without `mut` it is read-only data, such as a lookup table: the C
+compiler puts it in flash (it is `const`), and reading it is safe anywhere. `static mut` can be changed, and every use of
+it needs `unsafe { }`, because the compiler cannot see who else uses it. `static mut volatile` is for what an interrupt
+handler shares with the main program: every access really reads or writes memory.
+
+```
+static CRC_TABLE: [u32; 4] = [0, 0x1DB7_1064, 0x3B6E_20C8, 0x26D9_30AC];   // read-only data
+static mut volatile TICKS: u32 = 0;                                        // shared with an interrupt handler
+
+export "C" fn SysTick_Handler() {
+    unsafe { TICKS = TICKS + 1; }
+}
+
+fn main() -> i32 {
+    print(CRC_TABLE[2] as i32);      // safe: bounds-checked like any array
+    unsafe {
+        while TICKS < 10 { }         // waits for the handler (volatile: read again every time round)
+    }
+    return 0;
+}
+```
+
+- **The initial value** is data known at compile time: numbers, bools, constants, and struct, array and enum values made of
+  them (`[0; 256]`, `Pt { x: 1, y: 2 }`, `Option::Some(3)`), not calls. The type has to be `copy`, so reading a static
+  copies it and nothing is ever moved out of one. Without `volatile`, a loop that waits for an interrupt handler may
+  never end: the C compiler is free to keep the variable in a register (the SysTick firmware hangs at `-O2` without it).
+- **Reading and writing** are places like any other: `TABLE[i]`, `POS.x = 3`. A `static mut` passed to a function whose
+  parameter is a `let` array or struct is copied first, so the function keeps the value it was given even if the static
+  changes while it runs; an immutable static is passed by address, with no copy. A `static mut` can be an `inout` argument
+  (`fill(&BUF)`), a `volatile` one cannot (the C pointer would lose the `volatile`).
+- **Not tracked:** the compiler does not check initialization, moves or overlapping borrows of statics, since the value is
+  always set and other code may use it at any time. That is what `unsafe` is for.
+- **A static is not a constant:** `[u8; LIMIT]` and other things needed at compile time want a `const`. `len(TABLE)` is a
+  constant, though, and needs no `unsafe` even for a `static mut`.
+- Statics can be `pub` and are reached as `module::NAME`; two modules can each have a `COUNT`. In C they are `g_NAME`
+  (`gm<tag>_NAME` in other modules), and with `--emit-dir` the definition is in its module's file and an `extern` in the
+  header.
+
 ## Unsafe code and C
 
 Most programs never need this. Where they do, it is confined to `unsafe { }` blocks, so a reader can find it.
@@ -462,9 +502,8 @@ On a 68,000-line generated program `nogec` takes about 0.25 s; compiling the 9.6
 
 ## Known gaps (planned milestones)
 
-- There are no global variables. Shared state between an interrupt handler and `main` lives in memory owned by C
-  and is reached through a volatile pointer (see `examples/cortex-m/systick.nge`). Deciding how interrupt-shared
-  state should be typed is still open.
+- A `static mut` is the only way to share state with an interrupt handler, and it is unsafe to use; there is no
+  type that makes sharing safe (a critical section or atomic type) yet.
 - Arena and handle types (`Arena<T, N>`, `Id<T>`) are in the standard library (`std/arena.nge`).
 - The emitted C relies on what GCC and Clang do for things the C standard leaves implementation-defined:
   converting an out-of-range value to a signed type (`as`, and `<<`), `>>` of a negative value, and `__asm__`

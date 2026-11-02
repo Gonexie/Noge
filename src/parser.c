@@ -739,7 +739,7 @@ Node *parse_program(Token *tokens) {
         Node *d;
         bool is_pub = false; /* `pub` and `import` are words only where an item can start */
         if (cur()->kind == T_IDENT && str_is(cur()->text, "pub") &&
-            (peek(1)->kind == T_FN || peek(1)->kind == T_STRUCT || peek(1)->kind == T_ENUM || peek(1)->kind == T_CONST ||
+            ((peek(1)->kind == T_IDENT && str_is(peek(1)->text, "static")) || peek(1)->kind == T_FN || peek(1)->kind == T_STRUCT || peek(1)->kind == T_ENUM || peek(1)->kind == T_CONST ||
              peek(1)->kind == T_EXTERN || peek(1)->kind == T_EXPORT ||
              (peek(1)->kind == T_IDENT && str_is(peek(1)->text, "copy")))) {
             advance();
@@ -754,7 +754,23 @@ Node *parse_program(Token *tokens) {
             tail = &d->next;
             continue;
         }
-        if (cur()->kind == T_FN) d = parse_fn(EXT_NONE);
+        if (cur()->kind == T_IDENT && str_is(cur()->text, "static") && (peek(1)->kind == T_MUT || peek(1)->kind == T_IDENT)) {
+            d = mk(N_STATIC, advance()->line); /* static [mut] [volatile] NAME: Type = value; */
+            if (accept(T_MUT)) {
+                d->op = 1;
+                if (cur()->kind == T_IDENT && str_is(cur()->text, "volatile") && peek(1)->kind == T_IDENT) {
+                    advance();
+                    d->flag = 1;
+                }
+            }
+            d->name = expect(T_IDENT)->text;
+            expect(T_COLON);
+            d->ty = parse_type();
+            expect(T_ASSIGN);
+            d->a = parse_expr();
+            expect(T_SEMI);
+        }
+        else if (cur()->kind == T_FN) d = parse_fn(EXT_NONE);
         else if (cur()->kind == T_EXTERN || cur()->kind == T_EXPORT) { /* extern "C" fn f(..); / export "C" fn f(..) {..} */
             int ext = cur()->kind == T_EXTERN ? EXT_EXTERN : EXT_EXPORT;
             const char *what = ext == EXT_EXTERN ? "extern" : "export";

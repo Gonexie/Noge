@@ -860,6 +860,84 @@ static bool is_intrinsic(Str name) {
            str_is(name, "ptr_offset") || str_is(name, "volatile_read") || str_is(name, "volatile_write");
 }
 
+/* ---- statics: global variables. `static` holds read-only data (a lookup table), `static mut` can be changed, and is
+ * only used inside unsafe; `volatile` makes the C variable volatile, for what an interrupt handler shares. ---- */
+static int len_ctx; /* > 0 while checking the argument of len(): a static there is not read */
+
+static Type *static_type(Node *s) {
+    if (!s->type) {
+        int saved = cur_mod;
+        enter_module(s->mod);
+        s->type = resolve_type(s->ty);
+        enter_module(saved);
+    }
+    return s->type;
+}
+
+static Type *check_static_use(Node *n, Node *s) {
+    Type *t = static_type(s);
+    if (const_ctx && !len_ctx)
+        die(n->line, "'%.*s' is a static, not a constant: its value is not known at compile time", SF(s->name));
+    if (s->op && !len_ctx) require_unsafe(n, "using a 'static mut'");
+    n->decl = s;
+    n->local = -1;
+    n->by_ptr = 0;
+    n->mut = s->op;
+    return t;
+}
+
+/* the initial value of a static is data: numbers, bools, and struct, array and enum values made of them */
+static void static_data_check(Node *e) {
+    switch (e->kind) {
+    case N_INT:
+    case N_BOOL:
+        return;
+    case N_LIT:
+        for (Node *i = e->a; i; i = i->next) static_data_check(i->a);
+        return;
+    case N_ARRAY:
+    case N_VARIANT:
+        for (Node *x = e->a; x; x = x->next) static_data_check(x);
+        return;
+    case N_REPEAT:
+        static_data_check(e->a);
+        return;
+    default:
+        die(e->line, "the initial value of a static must be made of numbers, bools, constants, and struct, array and enum "
+                     "values of them");
+    }
+}
+
+static void static_check_init(Node *s) {
+    if (s->mut == 2) return;
+    int saved_mod = cur_mod;
+    enter_module(s->mod);
+    Type *t = static_type(s);
+    if (t == ty_unit) die(s->line, "a static cannot be of type 'unit'");
+    if (!t->is_copy) die(s->line, "a static must hold a copy type, but '%s' is not copy", t->name);
+    int saved_unsafe = unsafe_depth;
+    unsafe_depth = 0;
+    const_ctx++;
+    expect_type(s->a->line, t, check_expr(s->a, t));
+    const_ctx--;
+    unsafe_depth = saved_unsafe;
+    static_data_check(s->a);
+    enter_module(saved_mod);
+    s->mut = 2;
+}
+
+/* `module::name` is written like `Enum::Variant` and parsed as one; a module's name for a place, such as module::TABLE[1],
+ * has to be seen as a name before anything asks whether the expression is a place */
+static void fix_root(Node *n) {
+    while (n->kind == N_MEMBER || n->kind == N_INDEX) n = n->a;
+    if (n->kind == N_VARIANT && !n->qual.n && !n->flag && !n->a && find_alias(n->tyname) &&
+        !find_decl((Str){0}, n->tyname, n->line)) {
+        n->qual = n->tyname;
+        n->tyname = (Str){0};
+        n->kind = N_NAME;
+    }
+}
+
 static Node *lookup_fn(Str qual, Str name, int line) {
     Node *f = scope_find(K_FN, qual, name, line);
     if (f) return f;
@@ -877,6 +955,8 @@ static void require_mutable_place(Node *n, const char *action) {
     if (!is_place(n)) die(n->line, "only a variable or field can be %s", action);
     Node *root = n;
     while (root->kind == N_MEMBER || root->kind == N_INDEX) root = root->a;
+    if (root->decl && root->decl->kind == N_STATIC && !root->decl->op)
+        die(n->line, "'%.*s' is a static, not a 'static mut', so it cannot be %s", SF(root->name), action);
     if (!root->mut)
         die(n->line, "'%.*s' is read-only (declare it with 'var', or take it as an 'inout' parameter), so it cannot be %s",
             SF(root->name), action);
@@ -1161,6 +1241,10 @@ static Type *check_call(Node *n, Type *expect) {
                 die(a->line, "argument for %s parameter '%.*s' must be written '&place'", mode, SF(p->name));
             at = pre ? pre[ai] : check_expr(a->a, p->type);
             require_mutable_place(a->a, p->op == M_SET ? "passed as set" : "passed as inout");
+            Node *root = a->a;
+            while (root->kind == N_MEMBER || root->kind == N_INDEX) root = root->a;
+            if (root->decl && root->decl->kind == N_STATIC && root->decl->flag)
+                die(a->line, "'%.*s' is volatile, so it cannot be passed with '&': read it into a variable, or change its fields directly", SF(root->name));
             a->type = at;
         } else {
             if (a->kind == N_ADDR)
@@ -1229,8 +1313,11 @@ static Type *check_intrinsic(Node *n, Type *expect) {
     if (str_is(n->name, "len")) {
         if (argc != 1) die(n->line, "'len' takes one argument, an array");
         Node *a = n->a;
+        fix_root(a);
         if (!is_place(a)) die(a->line, "'len' takes an array variable, field or element");
+        len_ctx++; /* the array itself is not read: a static's length is known from its type */
         Type *t = check_expr(a, NULL);
+        len_ctx--;
         if (t->kind != TY_ARRAY) die(a->line, "'len' needs an array, found '%s'", t->name);
         n->kind = N_INT; /* folded: the array itself is not evaluated */
         n->ival = t->len;
@@ -1594,6 +1681,7 @@ static Type *check_expr_inner(Node *n, Type *expect) {
         if (!c && const_ctx && find_local(n->name))
             die(n->line, "'%.*s' is a variable, but a compile-time constant is needed here", SF(n->name));
         if (!c) die(n->line, "unknown name '%.*s'", SF(n->name));
+        if (c->kind == N_STATIC) return check_static_use(n, c);
         const_resolve(c);
         n->kind = c->type == ty_bool ? N_BOOL : N_INT; /* a constant is just its value */
         n->ival = c->ival;
@@ -1611,6 +1699,7 @@ static Type *check_expr_inner(Node *n, Type *expect) {
     case N_CALL:
         return !n->qual.n && is_intrinsic(n->name) ? check_intrinsic(n, expect) : check_call(n, expect);
     case N_INDEX: {
+        fix_root(n->a);
         if (!is_place(n->a)) die(n->line, "only an array variable, field or element can be indexed");
         Type *at = check_expr(n->a, NULL);
         if (at->kind != TY_ARRAY) die(n->line, "cannot index a value of type '%s'", at->name);
@@ -1817,8 +1906,10 @@ static void check_stmt(Node *s) {
         break;
     }
     case N_ASSIGN: {
-        if (s->a->kind == N_NAME && !find_local(s->a->name) && scope_find(K_CONST, s->a->qual, s->a->name, s->a->line))
-            die(s->a->line, "'%.*s' is a constant and cannot be assigned to", SF(s->a->name));
+        if (s->a->kind == N_NAME && !find_local(s->a->name)) {
+            Node *c = scope_find(K_CONST, s->a->qual, s->a->name, s->a->line);
+            if (c && c->kind == N_CONST) die(s->a->line, "'%.*s' is a constant and cannot be assigned to", SF(s->a->name));
+        }
         Type *lt = check_expr(s->a, NULL);
         require_mutable_place(s->a, "assigned to");
         expect_type(s->b->line, lt, check_expr(s->b, lt));
@@ -1986,7 +2077,7 @@ Node *check_program(Node *program) {
     /* 1. declare struct, function and constant names */
     size_t *cnt = arena_alloc(&g_arena, sizeof(size_t) * 3 * (size_t)g_nmodules);
     for (Node *d = prog; d; d = d->next)
-        cnt[3 * d->mod + (d->kind == N_STRUCT || d->kind == N_ENUM ? 0 : d->kind == N_CONST ? 2 : 1)]++;
+        cnt[3 * d->mod + (d->kind == N_STRUCT || d->kind == N_ENUM ? 0 : (d->kind == N_CONST || d->kind == N_STATIC) ? 2 : 1)]++;
     scopes = arena_alloc(&g_arena, sizeof(ModScope) * (size_t)g_nmodules);
     for (int i = 0; i < g_nmodules; i++) {
         map_init(&scopes[i].types, cnt[3 * i]);
@@ -1996,7 +2087,7 @@ Node *check_program(Node *program) {
     for (Node *d = prog; d; d = d->next) {
         enter_module(d->mod);
         bool is_type = d->kind == N_STRUCT || d->kind == N_ENUM;
-        Map *m = is_type ? &scopes[d->mod].types : d->kind == N_CONST ? &scopes[d->mod].consts : &scopes[d->mod].fns;
+        Map *m = is_type ? &scopes[d->mod].types : (d->kind == N_CONST || d->kind == N_STATIC) ? &scopes[d->mod].consts : &scopes[d->mod].fns;
         if (!map_put(m, d->name, d)) die(d->line, "'%.*s' is defined twice", SF(d->name));
         if (d->gen) {
             for (Node *p = d->gen; p; p = p->next)
@@ -2077,6 +2168,8 @@ Node *check_program(Node *program) {
             enter_module(d->mod);
             const_resolve(d);
         }
+    for (Node *d = prog; d; d = d->next)
+        if (d->kind == N_STATIC) static_check_init(d);
     Node *main_fn = NULL;
     for (Node *d = prog; d; d = d->next) {
         if (d->kind != N_FN || d->gen || d->inst) continue;

@@ -1,0 +1,69 @@
+copy struct Pt { x: i32, y: i32 }
+copy enum Mode { Idle, Run(u8) }
+
+const SIZE: usize = 4;
+static LIMIT: u32 = 100;
+static TABLE: [u8; 4] = [10, 20, 30, 40];
+static ORIGIN: Pt = Pt { x: -3, y: 7 };
+static MODE: Mode = Mode::Run(9);
+static ZEROS: [i32; SIZE] = [0; SIZE];
+static mut COUNTER: u32 = 0;
+static mut volatile TICKS: u32 = 5;
+static mut BUF: [u8; 4] = [1; 4];
+static mut POS: Pt = Pt { x: 1, y: 2 };
+static ONES: [u8; 4] = [3; 4];
+static MODE2: Mode = Mode::Run(0);          // variant 1 with a value of 0: not all zero bits
+
+fn sum(a: [u8; 4]) -> i32 {
+    var s = 0;
+    var i = 0;
+    while i < len(a) { s = s + a[i] as i32; i = i + 1; }
+    return s;
+}
+
+// a `let` array parameter keeps the value it was given, even if the static changes while the function runs
+fn peek(a: [u8; 4]) -> i32 {
+    unsafe { BUF[0] = 99; }
+    return a[0] as i32;
+}
+
+fn bump() {
+    unsafe { COUNTER = COUNTER + 1; }
+}
+
+fn fill(b: inout [u8; 4], v: u8) {
+    var i = 0;
+    while i < len(b) { b[i] = v; i = i + 1; }
+}
+
+fn main() -> i32 {
+    print(LIMIT as i32);                    // 100
+    print(TABLE[2] as i32);                 // 30
+    print(ORIGIN.x);                        // -3
+    match MODE {
+        Mode::Run(n) => { print(n as i32); }   // 9
+        Mode::Idle => { print(0); }
+    }
+    print(ZEROS[3]);                        // 0
+    print(sum(TABLE));                      // 100
+    print(len(TABLE) as i32);               // 4
+    bump(); bump(); bump();
+    unsafe { print(COUNTER as i32); }       // 3
+    unsafe {
+        TICKS = TICKS + 1;
+        print(TICKS as i32);                // 6
+        fill(&BUF, 7);
+        print(sum(BUF));                    // 28
+        POS.x = POS.x + 10;
+        print(POS.x + POS.y);               // 13
+        BUF[0] = 5;
+        print(peek(BUF));                   // 5: the value when it was passed
+        print(BUF[0] as i32);               // 99: what peek stored
+    }
+    match MODE2 {
+        Mode::Run(n) => { print(100 + n as i32); }   // 100
+        Mode::Idle => { print(-1); }
+    }
+    print(sum(ONES));                       // 12: every element is 3
+    return 0;
+}

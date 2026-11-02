@@ -1,0 +1,11 @@
+// error: 'LIMIT' is a static, not a constant
+copy struct Pt { x: i32, y: i32 }
+struct Big { a: i32 }
+static LIMIT: u32 = 100;
+static TABLE: [u8; 4] = [1, 2, 3, 4];
+static mut COUNTER: u32 = 0;
+static mut volatile TICKS: [u8; 4] = [0; 4];
+fn fill(b: inout [u8; 4]) { }
+fn f() -> i32 { return 0; }
+fn g(a: [u8; LIMIT]) { }
+fn main() -> i32 { return 0; }

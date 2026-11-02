@@ -22,7 +22,8 @@ static void ind(int d) {
 /* ---------- names and constants ---------- */
 
 static void put_var(IrVar *v) {
-    if (v->is_temp) fprintf(out, "t%d", v->id);
+    if (v->gname) fputs(v->gname, out);
+    else if (v->is_temp) fprintf(out, "t%d", v->id);
     else fprintf(out, "v%d_%.*s", v->id, SF(v->name));
 }
 
@@ -788,6 +789,113 @@ static void emit_trap_hook_definition(void) {
           out);
 }
 
+/* ---- statics ---- */
+static void put_static_ident(Node *d) {
+    if (d->mod == 0) fprintf(out, "g_%.*s", SF(d->name));
+    else fprintf(out, "gm%s_%.*s", g_modules[d->mod]->tag, SF(d->name));
+}
+
+/* is this initial value all zero bits (then `{0}` does) */
+static bool init_is_zero(Node *e) {
+    switch (e->kind) {
+    case N_INT: return e->ival == 0;
+    case N_BOOL: return e->ival == 0;
+    case N_LIT:
+        for (Node *i = e->a; i; i = i->next)
+            if (!init_is_zero(i->a)) return false;
+        return true;
+    case N_ARRAY:
+        for (Node *x = e->a; x; x = x->next)
+            if (!init_is_zero(x)) return false;
+        return true;
+    case N_REPEAT: return init_is_zero(e->a);
+    case N_VARIANT:
+        if (e->decl->ival != 0) return false;
+        for (Node *x = e->a; x; x = x->next)
+            if (!init_is_zero(x)) return false;
+        return true;
+    default: return false;
+    }
+}
+
+static void emit_static_init(Node *e, Type *t) {
+    if (init_is_zero(e)) {
+        fputs(is_aggregate(t) ? "{0}" : "0", out);
+        return;
+    }
+    switch (e->kind) {
+    case N_INT: {
+        Operand o = {0};
+        o.type = t;
+        o.c = e->op ? (uint64_t)0 - e->ival : e->ival;
+        put_operand(o);
+        break;
+    }
+    case N_BOOL:
+        fputs(e->ival ? "true" : "false", out);
+        break;
+    case N_LIT:
+        fputs("{ ", out);
+        for (Node *i = e->a; i; i = i->next) {
+            fprintf(out, ".m_%.*s = ", SF(i->name));
+            emit_static_init(i->a, i->decl->type);
+            fputs(i->next ? ", " : " ", out);
+        }
+        fputc('}', out);
+        break;
+    case N_ARRAY: /* an array is a struct around the C array */
+        fputs("{ { ", out);
+        for (Node *x = e->a; x; x = x->next) {
+            emit_static_init(x, t->elem);
+            fputs(x->next ? ", " : " ", out);
+        }
+        fputs("} }", out);
+        break;
+    case N_REPEAT:
+        fputs("{ { ", out);
+        for (uint64_t k = 0; k < e->ival; k++) {
+            emit_static_init(e->a, t->elem);
+            fputs(k + 1 < e->ival ? ", " : " ", out);
+        }
+        fputs("} }", out);
+        break;
+    case N_VARIANT: {
+        Operand tag = {0};
+        tag.c = e->decl->ival;
+        tag.type = t->tag_type;
+        fputs("{ .tag = ", out);
+        put_operand(tag);
+        if (e->a) {
+            fprintf(out, ", .u.v_%.*s = { ", SF(e->decl->name));
+            int k = 0;
+            Node *f = e->decl->a;
+            for (Node *x = e->a; x; x = x->next, f = f->next, k++) {
+                fprintf(out, "%s.f%d = ", k ? ", " : "", k);
+                emit_static_init(x, f->type);
+            }
+            fputs(" }", out);
+        }
+        fputs(" }", out);
+        break;
+    }
+    default: break;
+    }
+}
+
+/* the C variable of a static, as a declaration (extern, for other files) or with its initial value */
+static void emit_static(Node *d, bool define) {
+    if (!define) fputs("extern ", out);
+    if (!d->op) fputs("const ", out);
+    else if (d->flag) fputs("volatile ", out);
+    fprintf(out, "%s ", d->type->cname);
+    put_static_ident(d);
+    if (define) {
+        fputs(" = ", out);
+        emit_static_init(d->a, d->type);
+    }
+    fputs(";\n", out);
+}
+
 /* every struct, enum, array and pointer type, components first */
 static void emit_types(Node *prog) {
     for (Node *d = prog; d; d = d->next)
@@ -816,6 +924,9 @@ void emit_c(FILE *f, Node *prog, IrFunc *funcs, const EmitOpts *o) {
         fputs(";\n", out);
     }
     if (!opts->freestanding) fputs("\nvoid f_print(int32_t x) { printf(\"%d\\n\", (int)x); }\n", out);
+    fputc('\n', out);
+    for (Node *d = prog; d; d = d->next)
+        if (d->kind == N_STATIC) emit_static(d, true);
     fputc('\n', out);
 
     int file_mod = 0; /* the module NOGE_FILE names: a failed check says which file the line is in */
@@ -950,6 +1061,8 @@ void emit_c_dir(const char *dir, Node *prog, IrFunc *funcs, const EmitOpts *o) {
     if (!opts->freestanding) fputs("void f_print(int32_t x);\n", out);
     for (Node *d = prog; d; d = d->next)
         if (d->kind == N_FN && d->ext == EXT_EXTERN) emit_extern_proto(d);
+    for (Node *d = prog; d; d = d->next)
+        if (d->kind == N_STATIC) emit_static(d, false);
     fputs("\n#endif\n", out);
     snprintf(path, sizeof path, "%s/noge_types.h", dir);
     write_if_changed(path, out);
@@ -961,6 +1074,7 @@ void emit_c_dir(const char *dir, Node *prog, IrFunc *funcs, const EmitOpts *o) {
     for (int m = 0; m < g_nmodules; m++) {
         bool any = m == 0;
         for (IrFunc *fn = funcs; fn && !any; fn = fn->next) any = fn->decl->mod == m;
+        for (Node *d = prog; d && !any; d = d->next) any = d->kind == N_STATIC && d->mod == m;
         if (!any) continue;
         module_stem(stem, sizeof stem, m);
         out = tmpfile();
@@ -980,6 +1094,8 @@ void emit_c_dir(const char *dir, Node *prog, IrFunc *funcs, const EmitOpts *o) {
         for (IrFunc *fn = funcs; fn; fn = fn->next)
             if (fn->decl->mod == m) protos_in(&fn->body);
         fputc('\n', out);
+        for (Node *d = prog; d; d = d->next)
+            if (d->kind == N_STATIC && d->mod == m) emit_static(d, true);
         if (m == 0) {
             if (!opts->freestanding) fputs("void f_print(int32_t x) { printf(\"%d\\n\", (int)x); }\n\n", out);
             else emit_trap_hook_definition();
