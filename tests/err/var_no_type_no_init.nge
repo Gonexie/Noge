@@ -1,0 +1,5 @@
+// error: expected '='
+fn main() -> i32 {
+    var x;
+    return 0;
+}

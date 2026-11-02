@@ -1,0 +1,48 @@
+struct Pair { a: i32, b: i32 }
+
+// `set`: the callee must fully initialize the caller's variable.
+fn fill(p: set Pair, v: i32) {
+    p.a = v;
+    p.b = v * 2;
+}
+
+fn clamp(x: i32) -> i32 {
+    var r: i32;
+    if x < 0 { r = 0; } else if x > 100 { r = 100; } else { r = x; }
+    return r;
+}
+
+fn early(x: i32) -> i32 {
+    var r: i32;
+    if x == 0 { return -1; } else { r = x * 2; }
+    return r;                // only reachable through the else branch, where r is set
+}
+
+fn main() -> i32 {
+    var p: Pair;             // declared, not yet initialized
+    fill(&p, 21);
+    print(p.a);              // 21
+    print(p.b);              // 42
+    fill(&p, 1);             // set on an already-initialized variable is allowed
+    print(p.a + p.b);        // 3
+
+    print(clamp(-5));        // 0
+    print(clamp(50));        // 50
+    print(clamp(500));       // 100
+    print(early(0));         // -1
+    print(early(4));         // 8
+
+    var q: Pair;
+    q.a = 5;                 // initialized field by field
+    q.b = 6;
+    print(q.a * q.b);        // 30
+
+    var n = 0;
+    var last: i32;
+    while n < 3 {
+        last = n * 10;       // written inside the loop...
+        print(last);         // ...and read in the same iteration: 0 10 20
+        n = n + 1;
+    }
+    return 0;
+}

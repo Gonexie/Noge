@@ -1,0 +1,12 @@
+// error: use of moved value 'a'
+struct Buf { len: u32, cap: u32 }
+struct Pair { a: Buf, b: Buf }
+fn eat(b: sink Buf) { }
+fn eat_bool(b: sink Buf) -> bool { return true; }
+fn mkbuf() -> Buf { return Buf { len: 1, cap: 2 }; }
+fn main() -> i32 {
+    let a = mkbuf();
+    var i = 0;
+    while i < 3 { eat(a); i = i + 1; }
+    return 0;
+}

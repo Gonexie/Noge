@@ -1,0 +1,22 @@
+struct Pt { x: i32, y: i32 }
+
+fn add(dst: inout i32, src: i32) { dst = dst + src; }
+
+fn swap2(a: inout i32, b: inout i32) {
+    let t = a;
+    a = b;
+    b = t;
+}
+
+fn sum(p: Pt, q: Pt) -> i32 { return p.x + q.y; }
+
+fn main() -> i32 {
+    var p = Pt { x: 1, y: 2 };
+    swap2(&p.x, &p.y);       // two fields of one struct do not overlap
+    print(p.x);              // 2
+    print(p.y);              // 1
+    add(&p.x, p.y);          // writing p.x while reading p.y is fine
+    print(p.x);              // 3
+    print(sum(p, p));        // overlapping reads are fine: 3 + 1
+    return 0;
+}

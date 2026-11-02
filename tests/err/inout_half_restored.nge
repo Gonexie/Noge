@@ -1,0 +1,7 @@
+// error: must be fully initialized when the function returns
+struct Buf { len: u32, cap: u32 }
+struct Pair { a: Buf, b: Buf }
+fn eat(b: sink Buf) { }
+fn mk() -> Buf { return Buf { len: 1, cap: 2 }; }
+fn f(p: inout Buf) { let x = p; p.len = 1; }
+fn main() -> i32 { return 0; }

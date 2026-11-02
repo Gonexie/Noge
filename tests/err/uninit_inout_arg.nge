@@ -1,0 +1,7 @@
+// error: use of uninitialized value 'x'
+fn inc(x: inout i32) { x = x + 1; }
+fn main() -> i32 {
+    var x: i32;
+    inc(&x);
+    return 0;
+}

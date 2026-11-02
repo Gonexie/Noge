@@ -1,0 +1,5 @@
+// error: set parameter 'p' must be fully initialized
+fn init(p: set i32, c: bool) {
+    if c { p = 1; }
+}
+fn main() -> i32 { return 0; }

@@ -96,10 +96,32 @@ Notes
 
 ## Milestones
 1. Lexer, parser, type check for ints, structs, functions. Emit C, run hello-world on host. **Done** (see README).
-2. Init/move/exclusivity pass, with a negative test suite of programs that must be rejected.
+2. Init/move/exclusivity pass, with a negative test suite of programs that must be rejected. **Done** (see below).
 3. Arrays, arenas, bounds checks, overflow traps.
 4. C FFI with `unsafe`; build a blinky for a real target (e.g. ARM Cortex-M via arm-none-eabi-gcc).
 5. Enums and pattern matching; then generics.
+
+## Decisions made in milestone 2
+
+- **`copy` is opt-in**: `copy struct P { .. }`. All fields of a copy struct must be copy. Everything else moves.
+  Scalars and `bool` are copy.
+- **State is tracked per scalar leaf.** A struct is flattened into its scalar fields; a place like `r.size` is a
+  contiguous range of leaves. Partial moves and field-by-field initialization need no special cases, and moving a
+  field out of an `inout` parameter is legal as long as it is filled in again before every return.
+- **Structured flow, no CFG.** The language has only `if`, `while` and `return`, so the pass walks the tree.
+  `while` is iterated to a fixpoint (entry meet end-of-body) with errors suppressed, then analysed once more with
+  errors on. Code after `return` is unreachable and not reported on.
+- **`set` mode added** (callee must initialize; caller may pass an initialized or uninitialized place).
+  `var x: T;` declares without initializing; `let` always needs an initializer, because "assigned exactly once"
+  would need a second analysis.
+- **Exclusivity is stricter than Hylo's.** Hylo evaluates arguments left to right and only conflicts with accesses
+  that are live at the same time. Because the C we emit leaves evaluation order unspecified, any two sibling
+  operands, arguments or literal fields whose accesses overlap must both be reads, however deeply nested. When
+  milestone 3 lowers to an IR with explicit left-to-right temporaries this can be relaxed.
+- **`sink` parameters are immutable bindings** (take `var y = x;` to modify). `let` parameters cannot be moved from.
+- Declared-but-unassigned variables are zero-initialized in the emitted C, so a bug in the analysis cannot read
+  garbage and optimizers do not warn about maybe-uninitialized reads.
+- Dropping a non-copy value unused is allowed for now. Revisit when types with destructors or linear resources exist.
 
 ## Open questions
 - Do we need Hylo-style `subscript` projections to access into containers without copying, or is `inout` on paths plus arenas enough?

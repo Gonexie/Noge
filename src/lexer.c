@@ -14,7 +14,7 @@ static const struct { const char *s; TokKind k; } keywords[] = {
     {"fn", T_FN},       {"struct", T_STRUCT}, {"let", T_LET},     {"var", T_VAR},
     {"if", T_IF},       {"else", T_ELSE},     {"while", T_WHILE}, {"return", T_RETURN},
     {"as", T_AS},       {"true", T_TRUE},     {"false", T_FALSE}, {"inout", T_INOUT},
-    {"sink", T_SINK},
+    {"sink", T_SINK},   {"set", T_SET},       {"copy", T_COPY},
 };
 
 /* two-character operators first so they win over their prefixes */

@@ -30,6 +30,9 @@ static const char *c_op(int op) {
 
 static void emit_local(int id, Str name) { fprintf(out, "v%d_%.*s", id, SF(name)); }
 
+/* "declared, not yet assigned" variables start zeroed; the flow pass proves they are written before use */
+static void emit_zero(Type *t) { fputs(t->kind == TY_STRUCT ? "{0}" : "0", out); }
+
 static void emit_expr(Node *n);
 
 static void emit_int(Node *n) {
@@ -148,7 +151,8 @@ static void emit_stmt(Node *s, int d) {
         fprintf(out, "%s ", s->type->cname);
         emit_local(s->local, s->name);
         fputs(" = ", out);
-        emit_expr(s->a);
+        if (s->a) emit_expr(s->a);
+        else emit_zero(s->type);
         fputs("; (void)", out);
         emit_local(s->local, s->name);
         fputs(";\n", out);
@@ -209,7 +213,7 @@ static void emit_sig(Node *fn) {
     if (!fn->a) fputs("void", out);
     for (Node *p = fn->a; p; p = p->next) {
         if (p != fn->a) fputs(", ", out);
-        fprintf(out, "%s%s", p->type->cname, p->op == M_INOUT ? " *" : " ");
+        fprintf(out, "%s%s", p->type->cname, (p->op == M_INOUT || p->op == M_SET) ? " *" : " ");
         emit_local(p->local, p->name);
     }
     fputc(')', out);
@@ -239,6 +243,11 @@ void emit_c(FILE *f, Node *prog) {
         if (d->kind != N_FN) continue;
         emit_sig(d);
         fputs(" {\n", out);
+        for (Node *p = d->a; p; p = p->next) {
+            fputs("    (void)", out);
+            emit_local(p->local, p->name);
+            fputs(";\n", out);
+        }
         emit_stmts(d->b->a, 1);
         fputs("}\n\n", out);
     }

@@ -1,0 +1,42 @@
+struct Buf { len: u32, cap: u32 }     // not `copy`: using it by value moves it
+copy struct Pt { x: i32, y: i32 }     // `copy`: using it by value duplicates it
+
+fn make(n: u32) -> Buf { return Buf { len: n, cap: n * 2 }; }
+
+fn grow(b: sink Buf) -> Buf { return Buf { len: b.len + 1, cap: b.cap }; }
+
+fn show(b: Buf) {
+    print(b.len as i32);
+    print(b.cap as i32);
+}
+
+// Moving out of an inout parameter is fine as long as it is filled in again before returning.
+fn swap(a: inout Buf, b: inout Buf) {
+    let t = a;
+    a = b;
+    b = t;
+}
+
+fn main() -> i32 {
+    var a = make(1);
+    var b = make(10);
+    swap(&a, &b);
+    show(a);                 // borrowing does not move: 10 20
+    show(b);                 // 1 2
+
+    var i = 0;
+    while i < 3 {
+        a = grow(a);         // moved by the call, re-initialized by the assignment
+        i = i + 1;
+    }
+    show(a);                 // 13 20
+
+    let p = Pt { x: 1, y: 2 };
+    let q = p;               // copy: both stay usable
+    print(p.x + q.y);        // 3
+
+    let c = make(7);
+    let d = c;               // move: c is dead from here on
+    show(d);                 // 7 14
+    return 0;
+}

@@ -18,6 +18,7 @@ int main(int argc, char **argv) {
     char *src = read_file(in);
     Node *prog = parse_program(lex(src));
     check_program(prog);
+    flow_program(prog);
 
     FILE *out = outpath ? fopen(outpath, "w") : stdout;
     if (!out) {

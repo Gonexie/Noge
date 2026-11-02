@@ -1,0 +1,9 @@
+// error: use of uninitialized value 'p.b'
+struct P { a: i32, b: i32 }
+fn show(p: P) { }
+fn main() -> i32 {
+    var p: P;
+    p.a = 1;
+    show(p);
+    return 0;
+}

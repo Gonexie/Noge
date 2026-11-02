@@ -1,0 +1,4 @@
+// error: use of uninitialized value 'p'
+fn inc(x: inout i32) { x = x + 1; }
+fn init(p: set i32) { inc(&p); p = 1; }
+fn main() -> i32 { return 0; }

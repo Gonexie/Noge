@@ -216,8 +216,12 @@ static Node *parse_stmt(void) {
         n->op = t->kind == T_VAR;
         n->name = expect(T_IDENT)->text;
         if (accept(T_COLON)) n->tyname = parse_type_name();
-        expect(T_ASSIGN);
-        n->a = parse_expr();
+        if (!n->tyname.n) {
+            expect(T_ASSIGN);
+            n->a = parse_expr();
+        } else if (accept(T_ASSIGN)) {
+            n->a = parse_expr();
+        } /* else: declared now, assigned later; the flow pass checks that */
         expect(T_SEMI);
         return n;
     }
@@ -264,13 +268,14 @@ static Node *parse_block(void) {
         *tail = parse_stmt();
         tail = &(*tail)->next;
     }
-    advance();
+    b->end_line = advance()->line;
     return b;
 }
 
-static Node *parse_struct(void) {
+static Node *parse_struct(bool is_copy) {
     int line = advance()->line;
     Node *s = mk(N_STRUCT, line);
+    s->op = is_copy;
     s->name = expect(T_IDENT)->text;
     expect(T_LBRACE);
     Node **tail = &s->a;
@@ -303,6 +308,7 @@ static Node *parse_fn(void) {
         p->op = M_LET;
         if (accept(T_INOUT)) p->op = M_INOUT;
         else if (accept(T_SINK)) p->op = M_SINK;
+        else if (accept(T_SET)) p->op = M_SET;
         else accept(T_LET);
         p->tyname = parse_type_name();
         *tail = p;
@@ -323,8 +329,13 @@ Node *parse_program(Token *tokens) {
     while (cur()->kind != T_EOF) {
         Node *d;
         if (cur()->kind == T_FN) d = parse_fn();
-        else if (cur()->kind == T_STRUCT) d = parse_struct();
-        else die(cur()->line, "expected 'fn' or 'struct', found %s", describe(cur()));
+        else if (cur()->kind == T_STRUCT) d = parse_struct(false);
+        else if (cur()->kind == T_COPY) {
+            advance();
+            if (cur()->kind != T_STRUCT)
+                die(cur()->line, "expected 'struct' after 'copy', found %s", describe(cur()));
+            d = parse_struct(true);
+        } else die(cur()->line, "expected 'fn', 'struct' or 'copy struct', found %s", describe(cur()));
         *tail = d;
         tail = &d->next;
     }

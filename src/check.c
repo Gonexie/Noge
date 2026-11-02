@@ -2,16 +2,16 @@
 #include "noge.h"
 
 static Type prims[] = {
-    {TY_UNIT, "unit", 0, false, NULL, "void"},
-    {TY_BOOL, "bool", 1, false, NULL, "bool"},
-    {TY_INT, "i8", 8, true, NULL, "int8_t"},
-    {TY_INT, "i16", 16, true, NULL, "int16_t"},
-    {TY_INT, "i32", 32, true, NULL, "int32_t"},
-    {TY_INT, "i64", 64, true, NULL, "int64_t"},
-    {TY_INT, "u8", 8, false, NULL, "uint8_t"},
-    {TY_INT, "u16", 16, false, NULL, "uint16_t"},
-    {TY_INT, "u32", 32, false, NULL, "uint32_t"},
-    {TY_INT, "u64", 64, false, NULL, "uint64_t"},
+    {TY_UNIT, "unit", 0, false, NULL, "void", true, 0},
+    {TY_BOOL, "bool", 1, false, NULL, "bool", true, 1},
+    {TY_INT, "i8", 8, true, NULL, "int8_t", true, 1},
+    {TY_INT, "i16", 16, true, NULL, "int16_t", true, 1},
+    {TY_INT, "i32", 32, true, NULL, "int32_t", true, 1},
+    {TY_INT, "i64", 64, true, NULL, "int64_t", true, 1},
+    {TY_INT, "u8", 8, false, NULL, "uint8_t", true, 1},
+    {TY_INT, "u16", 16, false, NULL, "uint16_t", true, 1},
+    {TY_INT, "u32", 32, false, NULL, "uint32_t", true, 1},
+    {TY_INT, "u64", 64, false, NULL, "uint64_t", true, 1},
 };
 #define NPRIMS ((int)(sizeof prims / sizeof *prims))
 Type *ty_unit = &prims[0], *ty_bool = &prims[1], *ty_i32 = &prims[4];
@@ -90,13 +90,13 @@ static bool is_place(Node *n) {
     return n->kind == N_NAME;
 }
 
-static void require_mutable_place(Node *n, const char *what) {
-    if (!is_place(n)) die(n->line, "cannot %s: not a variable or field", what);
+static void require_mutable_place(Node *n, const char *action) {
+    if (!is_place(n)) die(n->line, "only a variable or field can be %s", action);
     Node *root = n;
     while (root->kind == N_MEMBER) root = root->a;
     if (!root->mut)
-        die(n->line, "cannot %s '%.*s': it is read-only (declare it with 'var', or as an 'inout' parameter)",
-            what, SF(root->name));
+        die(n->line, "'%.*s' is read-only (declare it with 'var', or take it as an 'inout' parameter), so it cannot be %s",
+            SF(root->name), action);
 }
 
 /* ---- expressions ---- */
@@ -131,15 +131,16 @@ static Type *check_call(Node *n) {
     Node *p = fn->a;
     for (Node *a = n->a; a; a = a->next, p = p->next) {
         Type *at;
-        if (p->op == M_INOUT) {
+        if (p->op == M_INOUT || p->op == M_SET) {
+            const char *mode = p->op == M_SET ? "set" : "inout";
             if (a->kind != N_ADDR)
-                die(a->line, "argument for inout parameter '%.*s' must be written '&place'", SF(p->name));
+                die(a->line, "argument for %s parameter '%.*s' must be written '&place'", mode, SF(p->name));
             at = check_expr(a->a, p->type);
-            require_mutable_place(a->a, "pass as inout");
+            require_mutable_place(a->a, p->op == M_SET ? "passed as set" : "passed as inout");
             a->type = at;
         } else {
             if (a->kind == N_ADDR)
-                die(a->line, "'&' is only for inout parameters, but '%.*s' is not inout", SF(p->name));
+                die(a->line, "'&' is only for inout or set parameters, but '%.*s' is not inout or set", SF(p->name));
             at = check_expr(a, p->type);
         }
         expect_type(a->line, p->type, at);
@@ -217,7 +218,7 @@ static Type *check_expr_inner(Node *n, Type *expect) {
         return t;
     }
     case N_ADDR:
-        die(n->line, "'&' is only allowed on arguments for inout parameters");
+        die(n->line, "'&' is only allowed on arguments for inout or set parameters");
     case N_BIN: {
         TokKind op = (TokKind)n->op;
         bool logic = op == T_ANDAND || op == T_OROR;
@@ -267,7 +268,11 @@ static void check_stmt(Node *s) {
     switch (s->kind) {
     case N_LET: {
         Type *t;
-        if (s->tyname.n) {
+        if (!s->a) { /* declared now, assigned later (var only) */
+            if (!s->op)
+                die(s->line, "'let' binding '%.*s' needs an initializer (use 'var' to assign it later)", SF(s->name));
+            t = resolve_type(s->tyname, s->line);
+        } else if (s->tyname.n) {
             t = resolve_type(s->tyname, s->line);
             expect_type(s->a->line, t, check_expr(s->a, t));
         } else {
@@ -280,7 +285,7 @@ static void check_stmt(Node *s) {
     }
     case N_ASSIGN: {
         Type *lt = check_expr(s->a, NULL);
-        require_mutable_place(s->a, "assign to");
+        require_mutable_place(s->a, "assigned to");
         expect_type(s->b->line, lt, check_expr(s->b, lt));
         break;
     }
@@ -337,14 +342,26 @@ static void visit_struct(Node *s) { /* reject structs that contain themselves by
     s->ival = 2;
 }
 
+/* Flatten a struct into scalar leaves; fields remember where theirs start. */
+static int layout_type(Type *t) {
+    if (t->nleaves) return t->nleaves;
+    int off = 0;
+    for (Node *f = t->decl->a; f; f = f->next) {
+        f->leaf_off = off;
+        off += layout_type(f->type);
+    }
+    return t->nleaves = off;
+}
+
 static void check_fn(Node *fn) {
     cur_fn = fn;
     nlocals = 0;
     depth = 1;
     next_id = 0;
     for (Node *p = fn->a; p; p = p->next)
-        p->local = declare(p->line, p->name, p->type, p->op == M_INOUT, p->op == M_INOUT);
+        p->local = declare(p->line, p->name, p->type, p->op == M_INOUT || p->op == M_SET, p->op == M_INOUT || p->op == M_SET);
     check_block(fn->b);
+    fn->nlocals = next_id;
     if (fn->type != ty_unit && !always_returns(fn->b))
         die(fn->line, "function '%.*s' does not return a value on every path", SF(fn->name));
 }
@@ -377,6 +394,7 @@ void check_program(Node *program) {
             memcpy(cn + 2, d->name.p, (size_t)d->name.n);
             t->cname = cn;
             t->decl = d;
+            t->is_copy = d->op != 0;
             d->type = t;
         } else if (str_eq(d->name, builtin_print.name)) {
             die(d->line, "'print' is a builtin function");
@@ -394,6 +412,15 @@ void check_program(Node *program) {
     }
     for (Node *d = prog; d; d = d->next)
         if (d->kind == N_STRUCT) visit_struct(d);
+    for (Node *d = prog; d; d = d->next) {
+        if (d->kind != N_STRUCT) continue;
+        layout_type(d->type);
+        if (!d->type->is_copy) continue;
+        for (Node *f = d->a; f; f = f->next)
+            if (!f->type->is_copy)
+                die(f->line, "field '%.*s' of copy struct '%.*s' has type '%s', which is not copy",
+                    SF(f->name), SF(d->name), f->type->name);
+    }
 
     /* 3. function signatures */
     Node *main_fn = NULL;

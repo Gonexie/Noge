@@ -1,0 +1,8 @@
+// error: use of uninitialized value 'x'
+fn main() -> i32 {
+    var x: i32;
+    var i = 0;
+    while i < 3 { x = i; i = i + 1; }
+    print(x);
+    return 0;
+}

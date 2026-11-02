@@ -45,7 +45,8 @@ char *read_file(const char *path);
     X(T_VAR, "'var'") X(T_IF, "'if'") X(T_ELSE, "'else'")                      \
     X(T_WHILE, "'while'") X(T_RETURN, "'return'") X(T_AS, "'as'")              \
     X(T_TRUE, "'true'") X(T_FALSE, "'false'") X(T_INOUT, "'inout'")            \
-    X(T_SINK, "'sink'") X(T_LPAREN, "'('") X(T_RPAREN, "')'")                  \
+    X(T_SINK, "'sink'") X(T_SET, "'set'") X(T_COPY, "'copy'")       \
+    X(T_LPAREN, "'('") X(T_RPAREN, "')'")                  \
     X(T_LBRACE, "'{'") X(T_RBRACE, "'}'") X(T_COMMA, "','")                    \
     X(T_COLON, "':'") X(T_SEMI, "';'") X(T_DOT, "'.'") X(T_ARROW, "'->'")      \
     X(T_ASSIGN, "'='") X(T_EQ, "'=='") X(T_NE, "'!='") X(T_LT, "'<'")          \
@@ -81,6 +82,8 @@ typedef struct Type {
     bool is_signed;
     Node *decl;        /* struct declaration */
     const char *cname; /* name in the emitted C */
+    bool is_copy;      /* may be duplicated implicitly; otherwise move-only */
+    int nleaves;       /* scalar fields after flattening nested structs */
 } Type;
 
 extern Type *ty_unit, *ty_bool, *ty_i32;
@@ -96,7 +99,7 @@ typedef enum {
     N_FN, N_PARAM, N_STRUCT, N_FDECL
 } NodeKind;
 
-typedef enum { M_LET, M_INOUT, M_SINK } ParamMode;
+typedef enum { M_LET, M_INOUT, M_SINK, M_SET } ParamMode;
 
 struct Node {
     NodeKind kind;
@@ -109,6 +112,9 @@ struct Node {
     int local;  /* local variable id (function-unique) */
     int by_ptr; /* NAME refers to an inout parameter (a C pointer) */
     int mut;    /* NAME refers to something assignable */
+    int leaf_off;  /* FDECL: first scalar leaf of this field inside its struct */
+    int nlocals;   /* FN: number of local ids used (params included) */
+    int end_line;  /* BLOCK: line of the closing brace */
     uint64_t ival;
     Type *type;  /* resolved type */
     Node *decl;  /* resolved callee / field */
@@ -116,6 +122,7 @@ struct Node {
 
 Node *parse_program(Token *toks); /* list of N_FN / N_STRUCT */
 void check_program(Node *prog);
+void flow_program(Node *prog); /* init / move / exclusivity checks */
 void emit_c(FILE *out, Node *prog);
 
 #endif

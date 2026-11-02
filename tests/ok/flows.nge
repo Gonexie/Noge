@@ -1,0 +1,72 @@
+struct Buf { len: u32, cap: u32 }
+struct Pair { a: Buf, b: Buf }
+
+fn mk(n: u32) -> Buf { return Buf { len: n, cap: n + 100 }; }
+fn eat(b: sink Buf) -> u32 { return b.len; }
+fn truthy(b: sink Buf) -> bool { return b.len > 0; }
+
+// A loop body that always returns never loops back, so moving inside it is fine.
+fn first_move(n: u32) -> u32 {
+    let a = mk(n);
+    var i = 0;
+    while i < 3 {
+        return eat(a);
+    }
+    return eat(a);
+}
+
+// Moved on one path, put back on that same path: whole again after the `if`.
+fn cond_reassign(c: bool) -> u32 {
+    var a = mk(1);
+    if c {
+        let t = eat(a);
+        a = mk(t + 1);
+    }
+    return eat(a);
+}
+
+// Take a field out of an inout parameter by putting a replacement in its place.
+fn take_a(p: inout Pair) -> Buf {
+    let r = p.a;
+    p.a = mk(0);
+    return r;
+}
+
+fn init(p: set Buf, n: u32) { p.len = n; p.cap = n * 2; }
+fn wrap(p: set Buf, n: u32) { init(&p, n + 1); }   // a set parameter can be forwarded
+
+fn both(c: bool) -> u32 {
+    var b: Buf;
+    if c { b = mk(3); } else { b = mk(4); }
+    return eat(b);
+}
+
+fn main() -> i32 {
+    print(first_move(5) as i32);
+    print(cond_reassign(true) as i32);
+    print(cond_reassign(false) as i32);
+
+    var p = Pair { a: mk(7), b: mk(8) };
+    let x = take_a(&p);
+    print(x.len as i32);
+    print(p.a.len as i32);
+    print(p.b.len as i32);
+    eat(p.a);                       // moves p.a; p.b is untouched
+    p.a = mk(9);                    // and a moved field can be assigned again
+    print(p.a.len as i32);
+
+    var w: Buf;
+    wrap(&w, 1);
+    print(w.len as i32);
+    print(w.cap as i32);
+
+    print(both(true) as i32);
+    print(both(false) as i32);
+
+    var s = mk(1);
+    let c = false;
+    if c && truthy(s) { print(99); }   // s is moved only if c is true
+    s = mk(6);                          // so assigning makes it whole on every path
+    print(eat(s) as i32);
+    return 0;
+}

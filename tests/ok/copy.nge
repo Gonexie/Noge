@@ -1,0 +1,13 @@
+copy struct Pt { x: i32, y: i32 }
+copy struct Seg { a: Pt, b: Pt }
+
+fn width(s: sink Seg) -> i32 { return s.b.x - s.a.x; }
+
+fn main() -> i32 {
+    let s = Seg { a: Pt { x: 1, y: 1 }, b: Pt { x: 4, y: 5 } };
+    print(width(s));
+    print(width(s));         // s was copied into the call, not moved
+    let t = s.b;             // copy of a nested copy struct
+    print(t.y);
+    return 0;
+}

@@ -1,0 +1,8 @@
+// error: set parameter 'p' must be fully initialized
+struct Buf { len: u32, cap: u32 }
+struct Pair { a: Buf, b: Buf }
+fn eat(b: sink Buf) { }
+fn eat_bool(b: sink Buf) -> bool { return true; }
+fn mkbuf() -> Buf { return Buf { len: 1, cap: 2 }; }
+fn init(p: set Pair) { p.a = mkbuf(); }
+fn main() -> i32 { return 0; }

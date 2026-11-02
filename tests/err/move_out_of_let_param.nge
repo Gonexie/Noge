@@ -1,0 +1,8 @@
+// error: cannot move out of 'b'
+struct Buf { len: u32, cap: u32 }
+struct Pair { a: Buf, b: Buf }
+fn eat(b: sink Buf) { }
+fn eat_bool(b: sink Buf) -> bool { return true; }
+fn mkbuf() -> Buf { return Buf { len: 1, cap: 2 }; }
+fn f(b: Buf) -> Buf { return b; }
+fn main() -> i32 { return 0; }

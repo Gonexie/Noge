@@ -1,0 +1,4 @@
+// error: which is not copy
+struct Inner { x: i32 }
+copy struct Outer { i: Inner }
+fn main() -> i32 { return 0; }

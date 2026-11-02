@@ -1,0 +1,10 @@
+// error: conflicting accesses
+fn two(a: inout i32, b: inout i32) { }
+fn one_rw(a: inout i32, b: i32) { }
+fn eat_s(a: sink Buf, b: sink Buf) { }
+struct Buf { len: u32, cap: u32 }
+struct Q { x: i32, y: i32 }
+fn two_q(a: inout Q, b: inout i32) { }
+fn rd(q: Q) -> i32 { return q.x; }
+fn bump(q: inout Q) -> i32 { q.x = q.x + 1; return q.x; }
+fn main() -> i32 { var q = Q { x: 1, y: 2 }; two_q(&q, &q.y); return 0; }
