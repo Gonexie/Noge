@@ -1,0 +1,35 @@
+// Enums and match in a freestanding build: the object needs nothing from the C library.
+extern "C" fn board_report(code: i32);
+
+copy enum Cmd { Move(i32), Spin(i32, i32), Stop }
+
+fn weight(c: Cmd) -> i32 {
+    return match c {
+        Cmd::Move(n) => n,
+        Cmd::Spin(a, b) => a * b,
+        Cmd::Stop => 0,
+    };
+}
+
+// every arm returns: no return after the match, and no warning from the C compiler about one
+fn kind(c: Cmd) -> u8 {
+    match c {
+        Cmd::Move(_) => { return 1; }
+        Cmd::Spin(_, _) => { return 2; }
+        Cmd::Stop => { return 3; }
+    }
+}
+
+fn main() -> i32 {
+    let cmds = [Cmd::Move(3), Cmd::Spin(4, 5), Cmd::Stop, Cmd::Move(-2)];
+    var sum = 0;
+    var kinds: u32 = 0;
+    var i = 0;
+    while i < len(cmds) {
+        sum = sum + weight(cmds[i]);
+        kinds = kinds * 4 + kind(cmds[i]) as u32;
+        i = i + 1;
+    }
+    unsafe { board_report(sum); }
+    return sum + kinds as i32;
+}

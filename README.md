@@ -7,6 +7,8 @@ The compiler (`nogec`) is written in C99 and emits C. See [docs/design.md](docs/
 make              # builds build/nogec
 make test         # host tests, then the Cortex-M tests under QEMU if the ARM toolchain is installed
 make check-arith  # slower: the overflow/division/shift code and the constant folder, against __int128
+make check-match  # slower: random enums and match arms, against a brute-force model and a reference interpreter
+make fuzz         # damaged programs must be rejected cleanly, never crash the compiler
 make -C examples/cortex-m test   # just the firmware (see examples/cortex-m/README.md)
 
 ./noge prog.nge                    # compile and run in one step (builds the compiler the first time)
@@ -48,16 +50,16 @@ fn main() -> i32 {
 }
 ```
 
-Items: `fn`, `struct`, `copy struct`, `const`, `extern "C" fn`, `export "C" fn`.
-Types: `i8..i64`, `u8..u64`, `usize`, `isize`, `bool`, `struct` (by value, nested), fixed arrays `[T; N]`, raw
-pointers `*mut T` and `*const T`. Statements: `let`, `var`, `if` / `else if` / `else`, `while`, `return`, assignment,
-`unsafe { }`. Expressions: arithmetic `+ - * / %`, bitwise `& | ^ ~ << >>`, comparison, `&& || !`, `as` casts (between
+Items: `fn`, `struct`, `copy struct`, `enum`, `copy enum`, `const`, `extern "C" fn`, `export "C" fn`.
+Types: `i8..i64`, `u8..u64`, `usize`, `isize`, `bool`, `struct` and `enum` (by value, nested), fixed arrays `[T; N]`,
+raw pointers `*mut T` and `*const T`. Statements: `let`, `var`, `if` / `else if` / `else`, `while`, `match`, `return`,
+assignment, `unsafe { }`. Expressions: arithmetic `+ - * / %`, bitwise `& | ^ ~ << >>`, comparison, `&& || !`, `as` casts (between
 integers, from `bool`, between integers and pointers, between pointers), struct literals, array literals `[a, b, c]`
 and `[value; N]`, field access, indexing, C strings `c"text"`. Numbers may be written `255`, `0xFF`, `0b1111` and
 with separators, `0x4002_1018`. Precedence follows Rust (`& | ^` bind tighter than `==`).
 
 `inout`, `sink`, `set` and `copy` are keywords only where they can be (in front of a parameter's type, in front of
-`struct`); elsewhere they are ordinary names.
+`struct` or `enum`); elsewhere they are ordinary names.
 
 Parameter conventions:
 
@@ -72,6 +74,106 @@ Parameter conventions:
 
 Builtins: `len(array)` (a constant that takes its integer type from context), `wrapping_add` / `wrapping_sub` /
 `wrapping_mul`, `print(i32)` (hosted builds only), and the pointer operations below.
+
+## Enums and `match`
+
+An enum is a value that is exactly one of several variants, and a variant may carry values. `match` takes it apart,
+and the compiler refuses a `match` that forgets a variant.
+
+```
+enum Shape {
+    Circle(i32),                  // a variant can carry values
+    Rect(i32, i32),
+    Empty,
+}
+
+fn area(s: Shape) -> i32 {
+    return match s {              // every variant must be handled
+        Shape::Circle(r) => 3 * r * r,
+        Shape::Rect(w, h) => w * h,
+        Shape::Empty => 0,
+    };
+}
+
+copy enum Color { Red, Green, Blue = 10 }   // `copy`: using it by value duplicates it
+
+fn describe(n: i32) {
+    match n {                     // as a statement the arms are blocks (or expressions)
+        0 => { print(100); }
+        1 | 2 => { print(200); }  // either
+        -1 => { print(300); }
+        x => { print(x); }        // a name takes the whole value
+    }
+}
+
+fn doubled(s: Shape, fallback: i32) -> i32 {
+    let n = match s {             // as a value every arm is an expression of one type ...
+        Shape::Circle(r) => r,
+        Shape::Rect(w, _) => w,
+        Shape::Empty => { return fallback; }   // ... or a block that ends in `return`
+    };
+    return n * 2;
+}
+```
+
+**Declaring.** `enum Name { A, B(T, U), C = 5 }` (a trailing comma is fine). Write a variant as `Name::A` or
+`Name::B(1, 2)`. `copy enum` is like `copy struct`: every value a variant carries must be `copy`. Without `copy` an
+enum is move-only, so a plain enum that is passed around by value is usually declared `copy`. A variant that
+carries no values may be given a number (`C = 5`, any integer constant); the others count up from the variant before,
+starting at 0. Enums nest: a variant can carry a struct or another enum, and an enum can be a struct field or an
+array element (`[Op; 10]`; `[value; N]` needs a `copy enum`). An enum cannot contain itself by value: use an index
+into an array, as in `tests/ok/arena.nge`. `enum` and `match` are reserved words.
+
+**Plain enums.** An enum none of whose variants carries values converts to its number with `as`
+(`Color::Blue as i32` is 10; it wraps like any other `as`) and compares with `==` and `!=`. An enum that carries
+values does neither; take it apart with `match`.
+
+**Patterns.** The arms of a `match` are tried from the top and the first one that fits is used.
+
+| pattern                         | fits                                                                  |
+|---------------------------------|-----------------------------------------------------------------------|
+| `_`                             | anything                                                              |
+| `name`                          | anything, and gives it that name inside the arm                       |
+| `5`, `-1`, `true`               | that integer or bool                                                  |
+| `Shape::Empty`, `Shape::Rect(w, h)` | that variant; inside the parentheses one pattern per value it carries, nested as deep as you like: `Msg::Pair(Cmd::Say(1 \| 2), _)` |
+| `p \| q`                        | either; the alternatives cannot bind names, since the arm could not tell which of them had one |
+
+A name in a pattern is a new variable that exists only in its arm. A bare name that is also a variant of the
+matched enum (`Circle` instead of `Shape::Circle`) is an error, not a new variable, because that mistake would
+silently match everything.
+
+**A statement or a value.** At the start of a statement `match` is a statement: each arm is `pattern => { ... }` or
+`pattern => expression,`, and an expression's value is dropped. Anywhere else it is an expression and gives the
+value of the arm that fits: every arm is `pattern => expression,`, all of one type. In an expression the only
+block allowed is one that ends in `return` (an early exit). A function whose arms all `return` needs no
+`return` after the `match`.
+
+**What the compiler checks.**
+
+- *Exhaustive.* Every possible value must be fitted by some arm, to any depth. The error names what is missing:
+  `match is not exhaustive: 'Shape::Empty' is not fully covered (add an arm for it, or a '_' arm)`. A `bool` needs
+  `true` and `false`, or a catch-all. Integers can only be covered by a catch-all arm (`_` or a name): a `match` on a
+  `u8` with all 256 literals still wants a `_`.
+- *No dead arms.* An arm that cannot fit any value the arms above it leave over is an error
+  (`this arm can never match`): a `_` first, a repeated variant, a `_` after every variant.
+- *Moves.* A name that binds a `copy` value (an integer, a `copy enum`) takes a copy. A name that binds a value that
+  is not `copy` moves it out of the matched variable, which then counts as moved until it is assigned again (the
+  enum is one unit for the move analysis, since which variant it holds is only known at run time). That is not
+  possible for a `let` parameter or an array element, so match those with `_` or bind only copy values.
+  Matching a place and binding nothing, or only copy values, never moves it.
+- *Order.* The matched expression is evaluated once, before any arm; only the arm that fits runs; the values of a
+  variant are evaluated left to right.
+
+**In C.** An enum is a struct with a tag and a union of the variants' values, so it lives where you put it (stack,
+struct, array), costs the tag plus its largest variant, and needs no allocation. The tag is the smallest of `u8`,
+`u16`, `u32`, `i32` and `i64` that holds every number given to the variants, and it *is* that number. A `match` is a
+chain of tag comparisons. An enum cannot be passed to or returned from C, nor can a struct or array that holds one,
+because C code could write a tag that names no variant; pass `variant as u32` instead.
+
+Not in this version: guards (`pattern if condition`), ranges (`1..5`), patterns that name struct fields,
+`if let` / `while let`, naming the whole value as well as its parts (`n @ Some(_)`), names inside `|`, and
+generic enums such as `Option<T>` (write `enum MaybeU32 { Some(u32), None }` for the type you need until generics
+arrive).
 
 ## Constants
 
@@ -167,6 +269,7 @@ The type checker (`src/check.c`) handles types, constants and mutability. The fl
   Array elements are chosen at run time, so borrowing two elements of one array at once is rejected.
 - **Unsafe.** Raw-pointer operations and calls to `extern` functions are only allowed inside `unsafe { }`.
 - **Constants and literals.** See above.
+- **`match`.** Exhaustive, no dead arms, and the move rules for names bound in patterns. See "Enums and `match`".
 
 Errors name the offending place, for example `use of moved value 'p.a.len'`, and stop at the first one.
 
@@ -204,7 +307,7 @@ On a 68,000-line generated program `nogec` takes about 0.25 s; compiling the 9.6
 - There are no global variables. Shared state between an interrupt handler and `main` lives in memory owned by C
   and is reached through a volatile pointer (see `examples/cortex-m/systick.nge`). Deciding how interrupt-shared
   state should be typed is still open.
-- Arena and handle types (`Arena<T, N>`, `Id<T>`) need generics. The pattern already works in plain code
+- Arena and handle types (`Arena<T, N>`, `Id<T>`) need generics (milestone 6). The pattern already works in plain code
   (see `tests/ok/arena.nge`): a struct holding an array and a length, with integer indices.
 - The emitted C relies on what GCC and Clang do for things the C standard leaves implementation-defined:
   converting an out-of-range value to a signed type (`as`, and `<<`), `>>` of a negative value, and `__asm__`
@@ -214,4 +317,5 @@ On a 68,000-line generated program `nogec` takes about 0.25 s; compiling the 9.6
 - `let x: T;` (assign later) is not supported, only `var x: T;`.
 - Recursion is not restricted yet.
 - The compiler stops at the first error, and the only backend is C.
-- Enums and pattern matching, generics, separate compilation.
+- Generics (so no `Option<T>` or `Arena<T, N>`), separate compilation. Patterns have no guards, ranges, struct
+  patterns, `if let` or `@` yet, and an enum cannot be passed to C.

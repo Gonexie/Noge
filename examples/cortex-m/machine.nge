@@ -1,0 +1,154 @@
+// Enums and match on the device: a small stack machine whose program is an array of instructions, and a
+// traffic light that steps through its states. No table of numbers and no switch on a code: a variant
+// carries exactly the values it needs, and the compiler refuses a match that forgets one.
+extern "C" fn semihost_puts(s: *const u8);
+extern "C" fn semihost_putbuf(s: [u8; 24]);   // an array is passed as a pointer to its first element
+extern "C" fn semihost_exit(code: i32);
+
+// Writes the decimal digits of n into buf, followed by a NUL.
+fn utoa(n: u32, buf: inout [u8; 24]) {
+    var tmp: [u8; 24] = [0; 24];
+    var digits: usize = 0;
+    var v = n;
+    if v == 0 {
+        tmp[0] = 48;
+        digits = 1;
+    }
+    while v > 0 {
+        tmp[digits] = (48 + v % 10) as u8;
+        digits = digits + 1;
+        v = v / 10;
+    }
+    var i: usize = 0;
+    while i < digits {
+        buf[i] = tmp[digits - 1 - i];
+        i = i + 1;
+    }
+    buf[digits] = 0;
+}
+
+fn say(label: *const u8, n: i32) {
+    var buf: [u8; 24] = [0; 24];
+    var magnitude: u32 = 0;
+    if n < 0 {
+        magnitude = (0 - (n as i64)) as u32;
+    } else {
+        magnitude = n as u32;
+    }
+    utoa(magnitude, &buf);
+    unsafe {
+        semihost_puts(label);
+        if n < 0 { semihost_puts(c"-"); }
+        semihost_putbuf(buf);
+        semihost_puts(c"\n");
+    }
+}
+
+// ---- a stack machine
+
+copy enum Op {
+    Push(i32),
+    Add,
+    Mul,
+    Neg,
+    Dup,
+    Halt,
+}
+
+struct Machine { stack: [i32; 8], sp: usize }
+
+fn push(m: inout Machine, v: i32) {
+    m.stack[m.sp] = v;           // a full stack is a failed bounds check, not a corrupted neighbour
+    m.sp = m.sp + 1;
+}
+
+fn pop(m: inout Machine) -> i32 {
+    m.sp = m.sp - 1;             // popping an empty stack is a failed overflow check
+    return m.stack[m.sp];
+}
+
+fn run(code: [Op; 10]) -> i32 {
+    var m = Machine { stack: [0; 8], sp: 0 };
+    var pc: usize = 0;
+    var running = true;
+    while running {
+        match code[pc] {
+            Op::Push(v) => { push(&m, v); }
+            Op::Add => {
+                let b = pop(&m);
+                let a = pop(&m);
+                push(&m, a + b);
+            }
+            Op::Mul => {
+                let b = pop(&m);
+                let a = pop(&m);
+                push(&m, a * b);
+            }
+            Op::Neg => {
+                let a = pop(&m);
+                push(&m, 0 - a);
+            }
+            Op::Dup => {
+                let a = pop(&m);
+                push(&m, a);
+                push(&m, a);
+            }
+            Op::Halt => { running = false; }
+        }
+        pc = pc + 1;
+    }
+    return pop(&m);
+}
+
+// ---- a traffic light
+
+copy enum Light { Red, RedAmber, Green, Amber }
+
+fn next(l: Light) -> Light {
+    return match l {
+        Light::Red => Light::RedAmber,
+        Light::RedAmber => Light::Green,
+        Light::Green => Light::Amber,
+        Light::Amber => Light::Red,
+    };
+}
+
+fn duration(l: Light) -> u32 {
+    return match l {
+        Light::Red => 4,
+        Light::RedAmber => 1,
+        Light::Green => 3,
+        Light::Amber => 1,
+    };
+}
+
+fn main() -> i32 {
+    // ((2 + 3) * 4), negated, doubled
+    let program = [Op::Push(2), Op::Push(3), Op::Add, Op::Push(4), Op::Mul,
+                   Op::Neg, Op::Dup, Op::Add, Op::Halt, Op::Halt];
+    say(c"stack machine result = ", run(program));
+
+    var light = Light::Red;
+    var left = duration(light);
+    var greens: u32 = 0;
+    var reds: u32 = 0;
+    var tick: u32 = 0;
+    while tick < 40 {
+        match light {
+            Light::Green => { greens = greens + 1; }
+            Light::Red => { reds = reds + 1; }
+            _ => { }
+        }
+        left = left - 1;
+        if left == 0 {
+            light = next(light);
+            left = duration(light);
+        }
+        tick = tick + 1;
+    }
+    say(c"green ticks = ", greens as i32);
+    say(c"red ticks = ", reds as i32);
+
+    unsafe { semihost_exit(0); }
+    return 0;
+}

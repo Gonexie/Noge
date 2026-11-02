@@ -1,0 +1,40 @@
+// A variant with 24 bool values and an exhaustive set of arms: every combination is covered, and checking it
+// has to stop as soon as a row fits everything, or it would try all 2^24 combinations.
+enum E { V(bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool), W }
+fn f(e: E) -> i32 {
+    return match e {
+        E::V(true, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _) => 1,
+        E::V(false, true, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _) => 2,
+        E::V(false, false, true, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _) => 3,
+        E::V(false, false, false, true, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _) => 4,
+        E::V(false, false, false, false, true, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _) => 5,
+        E::V(false, false, false, false, false, true, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _) => 6,
+        E::V(false, false, false, false, false, false, true, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _) => 7,
+        E::V(false, false, false, false, false, false, false, true, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _) => 8,
+        E::V(false, false, false, false, false, false, false, false, true, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _) => 9,
+        E::V(false, false, false, false, false, false, false, false, false, true, _, _, _, _, _, _, _, _, _, _, _, _, _, _) => 10,
+        E::V(false, false, false, false, false, false, false, false, false, false, true, _, _, _, _, _, _, _, _, _, _, _, _, _) => 11,
+        E::V(false, false, false, false, false, false, false, false, false, false, false, true, _, _, _, _, _, _, _, _, _, _, _, _) => 12,
+        E::V(false, false, false, false, false, false, false, false, false, false, false, false, true, _, _, _, _, _, _, _, _, _, _, _) => 13,
+        E::V(false, false, false, false, false, false, false, false, false, false, false, false, false, true, _, _, _, _, _, _, _, _, _, _) => 14,
+        E::V(false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, _, _, _, _, _, _, _, _, _) => 15,
+        E::V(false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, _, _, _, _, _, _, _, _) => 16,
+        E::V(false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, _, _, _, _, _, _, _) => 17,
+        E::V(false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, _, _, _, _, _, _) => 18,
+        E::V(false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, _, _, _, _, _) => 19,
+        E::V(false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, _, _, _, _) => 20,
+        E::V(false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, _, _, _) => 21,
+        E::V(false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, _, _) => 22,
+        E::V(false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, _) => 23,
+        E::V(false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true) => 24,
+        E::V(false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false) => 0,
+        E::W => 99,
+    };
+}
+fn main() -> i32 {
+    print(f(E::V(true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false)));   // 1
+    print(f(E::V(false, false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true)));   // 3
+    print(f(E::V(false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false)));   // 0
+    print(f(E::W));       // 99
+    return 0;
+}

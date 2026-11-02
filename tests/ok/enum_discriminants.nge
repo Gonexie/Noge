@@ -1,0 +1,66 @@
+// A match goes by variant, whatever number the variant has: explicit numbers, negative ones, ones that
+// need a 64-bit tag, and variants with values mixed in between.
+enum Op {
+    Nop = 5,
+    Push(i32),           // 6: one more than the variant before it
+    Pop = 100,
+    Dup,                 // 101
+    Jump(i32, i32),      // 102
+    Halt = -3,
+}
+
+fn run(op: Op) -> i32 {
+    return match op {
+        Op::Nop => 1,
+        Op::Push(n) => 10 + n,
+        Op::Pop => 3,
+        Op::Dup => 4,
+        Op::Jump(a, b) => a * b,
+        Op::Halt => 6,
+    };
+}
+
+enum Wide { Small = 1, Huge = 5000000000, Neg = -5000000000 }
+
+fn wide(w: Wide) -> i32 {
+    return match w {
+        Wide::Small => 1,
+        Wide::Huge => 2,
+        Wide::Neg => 3,
+    };
+}
+
+enum Mode { A = 5, B, C = 100, D, E = -3 }
+
+fn mode(m: Mode) -> i32 {
+    return match m {
+        Mode::A | Mode::B => 1,
+        Mode::C => 2,
+        Mode::D | Mode::E => 3,
+    };
+}
+
+fn main() -> i32 {
+    print(run(Op::Nop));            // 1
+    print(run(Op::Push(7)));        // 17
+    print(run(Op::Pop));            // 3
+    print(run(Op::Dup));            // 4
+    print(run(Op::Jump(6, 7)));     // 42
+    print(run(Op::Halt));           // 6
+
+    print(wide(Wide::Small));       // 1
+    print(wide(Wide::Huge));        // 2
+    print(wide(Wide::Neg));         // 3
+    print(Wide::Huge as i32);       // 5000000000 wraps to 705032704
+    print(Wide::Neg as i32);        // -705032704
+
+    print(mode(Mode::A));           // 1
+    print(mode(Mode::B));           // 1
+    print(mode(Mode::C));           // 2
+    print(mode(Mode::D));           // 3
+    print(mode(Mode::E));           // 3
+    print(Mode::B as i32);          // 6
+    print(Mode::D as i32);          // 101
+    print(Mode::E as i32);          // -3
+    return 0;
+}

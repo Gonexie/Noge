@@ -699,6 +699,14 @@ static Node ***expand_alternatives(Node ***rows, int *nrows, int ncols) {
 
 static bool covers(Node ***rows, int nrows, Type **types, int ncols);
 
+/* Does this row fit every value (every pattern in it is a wildcard or a name)? Then the rows below it do not
+ * matter, and the search can stop instead of trying every combination of the remaining columns. */
+static bool row_fits_all(Node **row, int ncols) {
+    for (int c = 0; c < ncols; c++)
+        if (!irrefutable(row[c])) return false;
+    return true;
+}
+
 /* The rows that can match variant v, with the first column replaced by the variant's values: a row for v
  * contributes its sub-patterns, a catch-all row contributes a wildcard for each value. *ts gets the new column types. */
 static Node ***specialize(Node ***rows, int nrows, Type **types, int ncols, Node *v, int *out_rows, Type ***ts) {
@@ -739,6 +747,8 @@ static bool variant_covered(Node ***rows, int nrows, Type **types, int ncols, No
 static bool covers(Node ***rows, int nrows, Type **types, int ncols) {
     if (ncols == 0) return nrows > 0;
     rows = expand_alternatives(rows, &nrows, ncols);
+    for (int r = 0; r < nrows; r++)
+        if (row_fits_all(rows[r], ncols)) return true;
     Type *t = types[0];
     if (t->kind == TY_ENUM) {
         for (Node *v = t->decl->a; v; v = v->next)
@@ -769,6 +779,8 @@ static uint64_t lit_bits(const Node *lit) {
 static bool useful(Node ***rows, int nrows, Node **q, Type **types, int ncols) {
     if (ncols == 0) return nrows == 0;
     rows = expand_alternatives(rows, &nrows, ncols);
+    for (int r = 0; r < nrows; r++)
+        if (row_fits_all(rows[r], ncols)) return false; /* that row already fits whatever q could */
     Node *p = q[0];
     Type *t = types[0];
     if (p->op == PAT_OR) {

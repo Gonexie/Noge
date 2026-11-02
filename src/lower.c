@@ -358,76 +358,6 @@ static IrVar *tag_of(Operand o, Type *enum_type, int line) {
     return load_to_temp(extend(p, PK_TAG, NULL, 0, enum_type->tag_type), enum_type->tag_type, line);
 }
 
-typedef struct {
-    Node *pat;
-    IrPlace place; /* where the value this pattern is matched against lives */
-} PatItem;
-
-/* Emit code that sets `m` to true if all the patterns in items[0..n) match. Each test is an `if` nested in the
- * one before, so a failed test skips everything that depends on it. Alternatives try one after the other. */
-static void lower_test(PatItem *items, int n, IrVar *m, int line) {
-    if (n == 0) {
-        store_to(m, op_const(ty_bool, 1), line);
-        return;
-    }
-    PatItem it = items[0];
-    Node *p = it.pat;
-    switch (p->op) {
-    case PAT_WILD:
-    case PAT_BIND:
-        lower_test(items + 1, n - 1, m, line);
-        return;
-    case PAT_LIT: {
-        IrVar *v = load_to_temp(it.place, p->type, line);
-        Operand lit = lower_expr(p->a); /* the checker typed and folded it (-5 included) */
-        IrVar *eq = compare(T_EQ, op_var(v), lit, p->type, line);
-        Instr *c = emit(I_IF, line);
-        c->a = op_var(eq);
-        Block *save = blk;
-        blk = &c->then;
-        lower_test(items + 1, n - 1, m, line);
-        blk = save;
-        return;
-    }
-    case PAT_VARIANT: {
-        Type *et = p->type;
-        IrPlace tp = extend(it.place, PK_TAG, NULL, 0, et->tag_type);
-        IrVar *tag = load_to_temp(tp, et->tag_type, line);
-        IrVar *eq = compare(T_EQ, op_var(tag), op_const(et->tag_type, p->decl->ival), et->tag_type, line);
-        Instr *c = emit(I_IF, line);
-        c->a = op_var(eq);
-        Block *save = blk;
-        blk = &c->then;
-        int ns = list_len(p->a), k = 0;
-        PatItem *next = zalloc(sizeof(PatItem) * (size_t)(ns + n - 1 ? ns + n - 1 : 1));
-        Node *f = p->decl->a;
-        for (Node *s = p->a; s; s = s->next, f = f->next, k++) { /* the values come first, then the rest */
-            next[k].pat = s;
-            next[k].place = extend(it.place, PK_PAYLOAD, p->decl, k, f->type);
-        }
-        for (int r = 1; r < n; r++) next[k++] = items[r];
-        lower_test(next, k, m, line);
-        blk = save;
-        return;
-    }
-    case PAT_OR:
-        for (Node *alt = p->a; alt; alt = alt->next) {
-            IrVar *pending = not_of(m, line); /* only if no earlier alternative has matched */
-            Instr *c = emit(I_IF, line);
-            c->a = op_var(pending);
-            Block *save = blk;
-            blk = &c->then;
-            PatItem *next = zalloc(sizeof(PatItem) * (size_t)n);
-            next[0].pat = alt;
-            next[0].place = it.place;
-            for (int r = 1; r < n; r++) next[r] = items[r];
-            lower_test(next, n, m, line);
-            blk = save;
-        }
-        return;
-    }
-}
-
 /* Declare the names a pattern binds, each a copy of the part of the value it names. */
 static void lower_bind(Node *p, IrPlace place, int line) {
     switch (p->op) {
@@ -456,8 +386,117 @@ static void lower_bind(Node *p, IrPlace place, int line) {
     }
 }
 
-/* match: the value is looked at once; then each arm in turn, while nothing has matched, tests its pattern,
- * binds its names and runs its body. An expression arm stores its value in the result. */
+static bool has_or(const Node *p) {
+    if (p->op == PAT_OR) return true;
+    if (p->op == PAT_VARIANT)
+        for (const Node *s = p->a; s; s = s->next)
+            if (has_or(s)) return true;
+    return false;
+}
+
+typedef struct {
+    Node *pat;
+    IrPlace place; /* where the value this pattern is matched against lives */
+} PatItem;
+
+/* One arm of a match being lowered, and what it does once its pattern has fitted. */
+typedef struct {
+    Node *arm;
+    IrPlace scrutinee;
+    IrVar *pending; /* true until an arm has run (none for a match with a single arm) */
+    IrVar *res;     /* the value of a match that is used as a value */
+    bool stmt;
+} ArmCtx;
+
+/* Bind the arm's names, run its body (or compute its value), and note that an arm has run. */
+static void run_arm(ArmCtx *c) {
+    Node *arm = c->arm;
+    lower_bind(arm->a, c->scrutinee, arm->line);
+    if (arm->op) {
+        lower_stmts(arm->b->a);
+    } else {
+        Operand v = lower_expr(arm->b);
+        if (!c->stmt) {
+            store_to(c->res, v, arm->line);
+        } else if (v.var && v.type != ty_unit) { /* a statement drops the value */
+            Instr *u = emit(I_USE, arm->line);
+            u->a = v;
+        }
+    }
+    if (arm->next && !(blk->last && blk->last->op == I_RETURN)) /* the last arm, or one that returns, need not say so */
+        store_to(c->pending, op_const(ty_bool, 0), arm->line);
+}
+
+/* Test the patterns in items[0..n) one after the other. Each test is an `if` nested in the one before, so a
+ * failed test skips everything that depends on it. When all have fitted, either `m` is set to true (a pattern
+ * with alternatives is tried more than once, and the arm must not be repeated for each) or, with no `m`, the arm
+ * itself runs right there inside the innermost `if`. */
+static void lower_test(PatItem *items, int n, IrVar *m, ArmCtx *ctx, int line) {
+    if (n == 0) {
+        if (m) store_to(m, op_const(ty_bool, 1), line);
+        else run_arm(ctx);
+        return;
+    }
+    PatItem it = items[0];
+    Node *p = it.pat;
+    switch (p->op) {
+    case PAT_WILD:
+    case PAT_BIND:
+        lower_test(items + 1, n - 1, m, ctx, line);
+        return;
+    case PAT_LIT: {
+        IrVar *v = load_to_temp(it.place, p->type, line);
+        Operand lit = lower_expr(p->a); /* the checker typed and folded it (-5 included) */
+        IrVar *eq = compare(T_EQ, op_var(v), lit, p->type, line);
+        Instr *c = emit(I_IF, line);
+        c->a = op_var(eq);
+        Block *save = blk;
+        blk = &c->then;
+        lower_test(items + 1, n - 1, m, ctx, line);
+        blk = save;
+        return;
+    }
+    case PAT_VARIANT: {
+        Type *et = p->type;
+        IrPlace tp = extend(it.place, PK_TAG, NULL, 0, et->tag_type);
+        IrVar *tag = load_to_temp(tp, et->tag_type, line);
+        IrVar *eq = compare(T_EQ, op_var(tag), op_const(et->tag_type, p->decl->ival), et->tag_type, line);
+        Instr *c = emit(I_IF, line);
+        c->a = op_var(eq);
+        Block *save = blk;
+        blk = &c->then;
+        int ns = list_len(p->a), k = 0;
+        PatItem *next = zalloc(sizeof(PatItem) * (size_t)(ns + n - 1 ? ns + n - 1 : 1));
+        Node *f = p->decl->a;
+        for (Node *s = p->a; s; s = s->next, f = f->next, k++) { /* the values come first, then the rest */
+            next[k].pat = s;
+            next[k].place = extend(it.place, PK_PAYLOAD, p->decl, k, f->type);
+        }
+        for (int r = 1; r < n; r++) next[k++] = items[r];
+        lower_test(next, k, m, ctx, line);
+        blk = save;
+        return;
+    }
+    case PAT_OR:
+        for (Node *alt = p->a; alt; alt = alt->next) {
+            IrVar *open = not_of(m, line); /* only if no earlier alternative has fitted */
+            Instr *c = emit(I_IF, line);
+            c->a = op_var(open);
+            Block *save = blk;
+            blk = &c->then;
+            PatItem *next = zalloc(sizeof(PatItem) * (size_t)n);
+            next[0].pat = alt;
+            next[0].place = it.place;
+            for (int r = 1; r < n; r++) next[r] = items[r];
+            lower_test(next, n, m, ctx, line);
+            blk = save;
+        }
+        return;
+    }
+}
+
+/* match: the value is looked at once (it is read where it lives, or evaluated into a temporary). Then each arm
+ * in turn, while no arm has run, tests its pattern and runs. An expression arm stores its value in the result. */
 static Operand lower_match(Node *m) {
     fn_has_match = true;
     bool stmt = m->flag;
@@ -471,41 +510,35 @@ static Operand lower_match(Node *m) {
         sp.base = v;
         sp.type = v->type;
     }
-    IrVar *done = decl_var(ty_bool, true, op_const(ty_bool, 0), line);
-    IrVar *res = stmt ? NULL : decl_var(m->type, false, (Operand){0}, line);
+    ArmCtx ctx = {0};
+    ctx.scrutinee = sp;
+    ctx.stmt = stmt;
+    ctx.pending = m->b->next ? decl_var(ty_bool, true, op_const(ty_bool, 1), line) : NULL;
+    ctx.res = stmt ? NULL : decl_var(m->type, false, (Operand){0}, line);
     for (Node *arm = m->b; arm; arm = arm->next) {
         Block *outer = blk;
         if (arm != m->b) { /* the first arm always gets its turn */
-            IrVar *pending = not_of(done, arm->line);
             Instr *c = emit(I_IF, arm->line);
-            c->a = op_var(pending);
+            c->a = op_var(ctx.pending);
             blk = &c->then;
         }
-        bool always = irrefutable(arm->a);
-        IrVar *matched = decl_var(ty_bool, true, op_const(ty_bool, always ? 1 : 0), arm->line);
-        if (!always) {
-            PatItem item = {arm->a, sp};
-            lower_test(&item, 1, matched, arm->line);
-        }
-        Instr *hit = emit(I_IF, arm->line);
-        hit->a = op_var(matched);
-        blk = &hit->then;
-        lower_bind(arm->a, sp, arm->line);
-        if (arm->op) {
-            lower_stmts(arm->b->a);
+        ctx.arm = arm;
+        PatItem item = {arm->a, sp};
+        if (irrefutable(arm->a)) {
+            run_arm(&ctx);
+        } else if (!has_or(arm->a)) {
+            lower_test(&item, 1, NULL, &ctx, arm->line);
         } else {
-            Operand v = lower_expr(arm->b);
-            if (!stmt) {
-                store_to(res, v, arm->line);
-            } else if (v.var && v.type != ty_unit) { /* a statement drops the value */
-                Instr *u = emit(I_USE, arm->line);
-                u->a = v;
-            }
+            IrVar *matched = decl_var(ty_bool, true, op_const(ty_bool, 0), arm->line);
+            lower_test(&item, 1, matched, &ctx, arm->line);
+            Instr *hit = emit(I_IF, arm->line);
+            hit->a = op_var(matched);
+            blk = &hit->then;
+            run_arm(&ctx);
         }
-        if (!(blk->last && blk->last->op == I_RETURN)) store_to(done, op_const(ty_bool, 1), arm->line); /* else it never gets here */
         blk = outer;
     }
-    return stmt ? op_unit() : op_var(res);
+    return stmt ? op_unit() : op_var(ctx.res);
 }
 
 /* Read a place into a fresh temporary. */

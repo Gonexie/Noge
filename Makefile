@@ -20,7 +20,16 @@ test-target: build/nogec
 check-arith: build/nogec
 	python3 tests/arith_check.py build/nogec
 
+# Random enums and match arms, checked against a brute-force model and a reference interpreter.
+check-match: build/nogec
+	python3 tests/match_check.py build/nogec
+
+# Damaged programs must be rejected with a message, never crash the compiler. Build nogec with
+# -fsanitize=address,undefined (see the top of tests/fuzz.py) to make memory errors visible too.
+fuzz: build/nogec
+	python3 tests/fuzz.py build/nogec --rounds 5
+
 clean:
 	rm -rf build
 
-.PHONY: test test-target check-arith clean
+.PHONY: test test-target check-arith check-match fuzz clean

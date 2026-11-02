@@ -1,6 +1,6 @@
 # Noge on a Cortex-M3
 
-Five small programs that run on an ARM Cortex-M3, plus the C board support they need. They are built with
+Six small programs that run on an ARM Cortex-M3, plus the C board support they need. They are built with
 `nogec --target=cortex-m` (no C library, 32-bit `usize`) and `arm-none-eabi-gcc`, and run under QEMU.
 
 ```
@@ -21,6 +21,7 @@ qemu-system-arm`). From the repository root, `make test` runs these tests too wh
 | `checks.nge`   | CRC-32, 64-bit arithmetic with overflow checks, a sort, `usize` being 32 bits                    |
 | `systick.nge`  | an interrupt handler written in Noge (`export "C" fn SysTick_Handler`)                           |
 | `trap.nge`     | a failed bounds check on the device: the hook reports the kind and the source line               |
+| `machine.nge`  | enums and `match`: a stack machine whose program is an array of instructions, and a traffic light |
 
 ## The files
 
@@ -55,7 +56,7 @@ QEMU's STM32 model does not implement the RCC and GPIO blocks, so it logs every 
 (`-d unimp`). `test.sh` uses that log to check the blinky's register traffic exactly: the clock enable
 (`RCC_APB2ENR` ← `0x10`), the pin configuration (`GPIOC_CRH` ← `0x00200000`), then six writes to `GPIOC_BSRR`
 alternating `0x20000000` (reset PC13: the active-low LED lights) and `0x00002000` (set: it goes dark).
-It also checks the text and exit status of the other four programs. `checks` compares against known values
+It also checks the text and exit status of the other five programs. `checks` compares against known values
 (`fib(90)`, `20!`, and the standard CRC-32 check value `0xCBF43926` for `"123456789"`).
 
 ## What has not been tested

@@ -100,7 +100,8 @@ Notes
 2. Init/move/exclusivity pass, with a negative test suite of programs that must be rejected. **Done** (see below).
 3. Arrays, bounds checks, overflow traps, an IR with a fixed evaluation order. **Done** (see below). Arena/handle types moved to the generics milestone.
 4. C FFI with `unsafe`; build a blinky for a real target (e.g. ARM Cortex-M via arm-none-eabi-gcc). **Done** on an emulated Cortex-M3 (see below); not yet run on a physical board.
-5. Enums and pattern matching; then generics.
+5. Enums and pattern matching. **Done** (see below).
+6. Generics (and with them `Option<T>`, `Arena<T, N>`, `Id<T>`), then separate compilation.
 
 ## Decisions made in milestone 2
 
@@ -195,9 +196,108 @@ Notes
   firmware has **not** been run on a physical board, so real-silicon behaviour (clock tree, LED polarity, timing)
   is unverified.
 
+## Decisions made in milestone 5
+
+- **An enum is a tagged union.** In C: `struct e_Shape { uint8_t tag; union { struct { int32_t f0; } v_Circle; ... } u; }`.
+  Values live where they are put (stack, struct field, array element), cost the tag plus the largest variant, and
+  need no allocation. The tag is the smallest of `u8`, `u16`, `u32`, `i32`, `i64` that holds every variant's number,
+  and it *is* that number, so a plain enum casts to an integer for free. A variant is built with a compound literal
+  (`(e_Shape){ .tag = 1, .u.v_Rect = { .f0 = w, .f1 = h } }`), which zeroes the bytes it does not use.
+- **An enum is one unit for the flow pass, like an array.** Which variant it holds is a run-time fact, so a value
+  inside it can be neither partly initialized nor partly moved. A pattern that binds a non-`copy` value therefore
+  moves the whole matched variable (in that arm), and it has to be assigned before it is used again; binding only
+  `copy` values, or nothing, just reads it. The state after a `match` is the join of the states at the ends of the
+  arms. Moving out of a `let` parameter or an array element is refused, as everywhere else.
+- **Patterns: `_`, names, integer and bool literals (negative too), `Enum::Variant(patterns)` to any depth, and `|`.**
+  That is what state machines, decoders and interpreters need, and it keeps the exhaustiveness algorithm small
+  enough to test thoroughly. Left out on purpose, to be added when a program needs them: guards (`if`), ranges,
+  struct patterns, `if let` / `while let`, `@` bindings. Alternatives cannot bind names (which of them matched
+  would decide whether the name has a value). A bare name that is also a variant of the matched enum is an error
+  rather than a new variable, because writing `Circle` for `Shape::Circle` would otherwise match everything.
+- **Exhaustiveness is checked by specializing a matrix of patterns** (the usual algorithm: rows are arms, columns
+  are the values still to be looked at; for each variant, keep the rows that can match it and replace the first
+  column by the values it carries). The error names the variants that are not fully covered. Integers can only be
+  covered by a catch-all arm, so a `match` on a `u8` with 256 literal arms still wants a `_`: the check is
+  conservative, never lenient. A row that fits everything ends the search (without that, a contrived match with 22
+  refutable columns took 22 seconds to check and each four more columns multiplied it by 16).
+- **An arm that can never match is an error**, not a warning: the compiler has no warnings, and a dead arm (a `_`
+  too early, a repeated variant, a `_` after every variant) is nearly always a mistake. It is the same walk over the
+  same matrix, asking whether the arm fits any value the arms above it leave over.
+- **`match` as a statement or a value.** At the start of a statement it is a statement (arms are blocks or
+  expressions, values dropped); anywhere else it is an expression whose arms are expressions of one type. The one
+  block allowed in an expression is one that ends in `return`, so `let n = match o { Some(n) => n, None => { return -1; } };`
+  works. The matched expression is evaluated once, before any arm.
+- **Plain enums** (no variant carries values) cast to integers with `as` and compare with `==` / `!=`. Enums that
+  carry values do neither; they are taken apart with `match`. `enum` is not `copy` unless declared `copy enum`
+  (all carried values must then be `copy`), the same rule as for structs.
+- **Operators only read their operands.** `==`, `!=`, `as`, `!` and arithmetic used to treat reading a non-`copy`
+  place as a move, which never mattered while only integers and bools could appear there. A plain enum without
+  `copy` that was compared or cast could not be used again. Found by the first test that compared one.
+- **Enums stay out of C.** An enum, or a struct or array that holds one, cannot be a parameter or result of an
+  `extern` or `export` function: C code could write a tag that names no variant, and a `match` would then read the
+  values of the wrong one. Pass `variant as u32`.
+- **No enum contains itself by value**, directly or through a struct or another enum; the checker says so. Recursive
+  data needs indices into an array (see `tests/ok/arena.nge`) until there are generics and an arena type.
+- **`match` lowers to flat code, not to a C `switch`.** The matched value is read where it lives (or evaluated once
+  into a temporary). Each arm after the first sits in `if (pending)`; its pattern becomes a chain of nested `if`s on
+  tag and literal comparisons, with the arm's code in the innermost one and `pending = false` at its end. A pattern
+  with `|` sets a flag instead, so the arm is not repeated for each alternative. Flat means a 2000-arm `match` is not
+  2000 blocks deep (C only guarantees 127). Every arm keeps its test, even the last one of an exhaustive match, so a
+  tag that names no variant (only possible through unsafe code or a compiler bug) runs no arm instead of reading the
+  wrong variant's values. A `switch` on the tag for the common case is an obvious later optimization; whether
+  it would shrink or speed up the code has not been measured.
+- **A function whose paths all return through arms of a `match` ends with a `return` that never runs.** The checker
+  knows every path returns, but a C compiler cannot follow that through the `pending` flags and warns that control
+  reaches the end of a non-void function (an error under `-Werror`, which the tests use).
+- **`enum` and `match` are now reserved words.** A program that used them as names has to rename them.
+- **Cost.** The generated C for a `match` is about 10 lines per arm. A 2000-variant enum with a 2000-arm `match`:
+  `nogec` 0.17 s, 19,000 lines of C, 0.02 s for tcc, 1.3 s for `gcc -O0`, 3.0 s for `gcc -O2`.
+
+### How milestone 5 was checked
+
+- **Tests.** 8 programs that must run (`tests/ok/enum_*.nge`, `match_*.nge`: results worked out by hand, not copied
+  from the compiler), 63 that must be rejected (`tests/err/`, each with the message it must give, and each message
+  read to confirm it fires for the reason intended), a freestanding one, and `examples/cortex-m/machine.nge` (a
+  stack machine and a traffic light, run under QEMU at `-O0`, `-O1`, `-O2`, `-O3`, `-Os` and with `--no-builtins`).
+  Writing them, and the checks below, found five problems: operators moving their operands, a C-compiler warning for
+  functions that end in a `match`, another for a `match` with one arm (a flag that was set and never read), a struct
+  holding an enum being allowed across the C boundary, and an exhaustiveness search that took exponential time.
+- **A differential test** (`tests/match_check.py`, `make check-match`) generates random enums (nested, with bool,
+  integer and enum values, explicit and negative discriminants) and random arm lists, then compares the compiler with
+  two independent models: a brute-force enumeration of every value of the scrutinee's type (verdict: accepted, not
+  exhaustive, dead arm) and a small interpreter of match semantics (the arm taken and the values its names are bound
+  to, compared with what the compiled program prints, built with `-Wall -Wextra -Wpedantic -Werror`). More than
+  40,000 random programs were run, in default and portable mode, with gcc (`-O0`, `-O2`, `-Os`), clang and tcc.
+  They all agree.
+- **Mutation testing.** 37 deliberate bugs were put into the exhaustiveness, dead-arm and code generation code, one
+  at a time; 35 are caught by the differential test, and 2 change speed but not behaviour (a loop over `true` and
+  `false` that is symmetric, and testing the alternatives of a `|` pattern again after one has matched). In the first
+  run (30 mutants) five were missed: two of those were the equivalent ones, three were real gaps in the generator
+  (it never wrote explicit discriminants, and never made a variant with two refutable values). It was extended and
+  they were caught. The lowering was then rewritten for smaller output and its 16 mutants were run against the new
+  code, as were 2 for the shortcut in the search. The other checker mutants were last run against the generator as
+  it was before it was extended.
+- **Sanitizers and fuzzing.** The whole test suite and the differential test were run through a compiler built with
+  AddressSanitizer and UBSanitizer, as were about 50,000 damaged programs (`tests/fuzz.py`: a token deleted, repeated,
+  swapped or replaced, or the file cut short), the last 13,000 against the final code: no memory error, no crash,
+  and every failure was an ordinary `error:` message. (The fuzzer itself was checked against fake compilers that
+  crash and that print odd messages.) The C generated for every `tests/ok` program was built with `-Werror` at
+  `-O2` and `-Os` with gcc and clang, and at `-O0` with gcc's sanitizers, in both overflow modes: 320 builds, no
+  warning, the expected output every time. All of it passes through tcc as well.
+
+What this does **not** show: nothing here ran on real hardware, on a 32-bit host or on a big-endian one; clang's
+sanitizers were not installed here, so that one combination was not tried; the random programs use `copy` enums
+holding bool, integer and enum values, so moves of non-`copy` values, structs inside variants, arrays and `inout`
+scrutinees are covered by hand-written tests only; and the exhaustiveness search is exponential in the worst case,
+which the shortcut above avoids for rows that fit everything but not for every contrived set of patterns.
+
 ## Open questions
 - Do we need Hylo-style `subscript` projections to access into containers without copying, or is `inout` on paths plus arenas enough?
-- Copy vs move default for small structs.
+- Copy vs move default for small structs, and for plain enums: `copy enum Color { .. }` has to be written, and
+  nearly every enum without values is wanted that way.
+- Integer patterns: ranges (`0..=9`) and a check that a `match` on a `u8` with all 256 literals is exhaustive.
+- Guards (`pattern if cond`) and `if let`: wait for a program that is clumsy without them.
+- A `switch` on the tag in the generated C for the common simple `match`.
 - Interrupt handlers and shared state with main code: `export "C"` handlers and C-owned memory work today, but a
   typed answer (global `static`s, a `Volatile<T>` or critical-section type) is still to be designed.
 - A safe way to hand C a pointer to a Noge buffer that outlives one call (today only extern parameter modes, for
