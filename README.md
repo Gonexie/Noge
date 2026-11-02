@@ -10,11 +10,13 @@ make check-arith  # slower: the overflow/division/shift code and the constant fo
 make check-match  # slower: random enums and match arms, against a brute-force model and a reference interpreter
 make check-generics  # slower: random generic programs, against the same programs with every instance written out
 make check-modules   # every positive test cut into two files, against its expected output
+make check-separate  # the same programs built from one C file per module, and what a rebuild touches
 make fuzz         # damaged programs must be rejected cleanly, never crash the compiler
 make -C examples/cortex-m test   # just the firmware (see examples/cortex-m/README.md)
 
 ./noge prog.nge                    # compile and run in one step (builds the compiler the first time)
 ./noge -O prog.nge                 # the same with gcc -O2: slower to build, faster to run
+./noge --build-dir=build prog.nge  # one C file per module in build/; the next run rebuilds only what changed
 
 build/nogec -o out.c prog.nge && cc -o out out.c && ./out      # the same thing, by hand
 build/nogec --target=cortex-m -o fw.c fw.nge      # for a microcontroller: no C library, 32-bit pointers
@@ -279,8 +281,25 @@ fn helper() -> i32 { return 0; }               // not pub: only this file can us
 - A file imported by several others is loaded once. Files cannot import each other in a circle.
 - Generic code resolves the names in it where it was written: a generic function from `lib.nge` can call lib's private
   helpers when it is used from `main.nge`. A run-time failure and a compile error name the file they are in.
-- Everything is compiled together into one C file. (Compiling each module to its own C file, so that a change
-  rebuilds only what it touches, comes next.)
+- By default everything is compiled into one C file. For a big program, see below: one C file per module.
+
+**One C file per module.** `nogec --emit-dir=build prog.nge` writes `build/noge_types.h` (the types and the run-time
+check machinery), a `.c` file for every module that has functions, and a `build/Makefile`; `make -C build` compiles
+each file and links them (`CC`, `CFLAGS`, and `EXTRA` for more C files to link can be set on the command line).
+`./noge --build-dir=build prog.nge` does all of that and runs the program. The whole program is still checked together
+(it takes 0.1 s for 24,000 lines), so nothing else is needed to keep the modules in step; what is separate is the C.
+A file is only rewritten when its text changes, and each file lists just the functions it defines and calls, so:
+
+- changing a function's body rebuilds that module's file only; so does adding a function, or a new use of a generic
+  function from another module (the instance is written into the generic function's own module);
+- changing a struct or enum changes `noge_types.h`, which every file includes, so everything rebuilds, as in C;
+- the C names of modules and instances come from hashes of what they are, not from how many came before, so one
+  module's file does not change because another module got a new instance;
+- changing the compiler or its flags rebuilds everything (the Makefile remembers them).
+
+On a test project of 41 files, 24,000 lines and 2,400 functions, `gcc -O2` took 19.0 s for a full build (20.9 s as one C
+file); after editing one function, `nogec` and `make` took 0.6 s together. The price is that a call from one module to
+another cannot be inlined by the C compiler (`-flto` brings it back): the firmware example is 4 bytes bigger.
 
 **The standard library** is written in Noge, in the `std/` folder next to the compiler (`--std-dir=DIR` or the
 `NOGE_STD` variable say where it is if the compiler is moved). `import "std/ring.nge" as ring;` loads it.
@@ -369,6 +388,8 @@ prints `file:line: runtime error: ...` and exits with status 101.
 | `--ptr-bits=32`        | `usize`, `isize` and pointers are 32 bits wide (default: the host's width, 64)  |
 | `--target=cortex-m`    | both of the above                                                               |
 | `--no-builtins`        | portable C99 overflow checks instead of `__builtin_*_overflow`                   |
+| `--emit-dir=DIR`       | one C file per module in DIR, with a header and a Makefile (see Modules)         |
+| `--std-dir=DIR`        | where `std/` is (or the `NOGE_STD` variable); `--no-prelude` leaves out `Option` / `Result` |
 
 `usize` is as wide as the target's pointers, so `--ptr-bits` must match the C compiler you build the output with.
 Only 32- and 64-bit pointers are supported.
@@ -453,6 +474,6 @@ On a 68,000-line generated program `nogec` takes about 0.25 s; compiling the 9.6
 - `let x: T;` (assign later) is not supported, only `var x: T;`.
 - Recursion is not restricted yet.
 - The compiler stops at the first error, and the only backend is C.
-- Separate compilation: one C file per module, rebuilt only when it changes. Modules have no re-exports
+- Modules have no re-exports
   (`pub import`), no `use` to bring one name in, and no nesting (`a::b::c`). The standard library is small. Generics
   have no bounds. Patterns have no guards, ranges, struct patterns, `if let` or `@` yet, and an enum cannot be passed to C.

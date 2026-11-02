@@ -121,5 +121,7 @@ typedef struct {
 
 IrFunc *lower_program(Node *prog);
 void emit_c(FILE *out, Node *prog, IrFunc *funcs, const EmitOpts *opts);
+/* the same program as a header, a C file per module and a Makefile in a folder; a file is only rewritten if it changed */
+void emit_c_dir(const char *dir, Node *prog, IrFunc *funcs, const EmitOpts *opts);
 
 #endif

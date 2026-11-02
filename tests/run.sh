@@ -11,6 +11,8 @@
 #   free/*.nge  built with --freestanding as a -ffreestanding object that must not need stdio or exit
 #   mod/*/      programs of several files: main.nge (and what it imports) must print main.out; a main.trap holds
 #               text that must be on stderr when the run ends in a failed check (status 101)
+#               The mod/ programs are also built as one C file per module (nogec --emit-dir, then make), and must
+#               print the same.
 #   moderr/*/   main.nge must be rejected, with the text on its first line "// error: <text>" in the message
 #
 # ok/, trap/ and ffi/ run twice: with __builtin_*_overflow, and with --no-builtins (portable C99 checks).
@@ -89,6 +91,31 @@ for mode in "" "--no-builtins"; do
         fi
     done
 
+    for d in tests/mod/*/; do
+        [ -e "${d}main.nge" ] || continue
+        b=sep_$(basename "$d")
+        mkdir -p "$tmp/$b.dir"
+        if ! "$NOGEC" $mode --emit-dir="$tmp/$b.dir" "${d}main.nge" 2>"$tmp/err"; then
+            failed "$d [$mode]: nogec rejected it (as separate C files)" "$tmp/err"
+            continue
+        fi
+        if ! make -s -C "$tmp/$b.dir" CC="$CC" CFLAGS="-std=c99 -Wall -Wextra -Wpedantic -Werror" >"$tmp/err" 2>&1; then
+            failed "$d [$mode]: the separate C files do not build cleanly" "$tmp/err"
+            continue
+        fi
+        "$tmp/$b.dir/main" >"$tmp/$b.out" 2>"$tmp/$b.stderr"
+        code=$?
+        want_code=0
+        [ -f "${d}main.trap" ] && want_code=101
+        if [ "$code" -ne "$want_code" ]; then
+            failed "$d [$mode]: separate C files: exit status $code, wanted $want_code" "$tmp/$b.stderr"
+        elif diff -u "${d}main.out" "$tmp/$b.out" >"$tmp/diff"; then
+            pass=$((pass + 1))
+        else
+            failed "$d [$mode]: separate C files: wrong output" "$tmp/diff"
+        fi
+    done
+
     for f in tests/ffi/*.nge; do
         [ -e "$f" ] || continue
         b=$(basename "$f" .nge)
@@ -132,6 +159,8 @@ runner_check() { # runner_check <name> <wanted status> <wanted stdout> <text wan
     fi
 }
 runner_check "gcc" 0 42 "" --gcc tests/ok/hello.nge
+runner_check "build-dir" 0 "$(cat tests/mod/basic/main.out)" "" --build-dir="$tmp/bd" tests/mod/basic/main.nge
+runner_check "build-dir again" 0 "$(cat tests/mod/basic/main.out)" "" --build-dir="$tmp/bd" tests/mod/basic/main.nge
 if command -v tcc >/dev/null 2>&1; then runner_check "tcc" 0 42 "" tests/ok/hello.nge; fi
 runner_check "run-time check" 101 1 ":5: runtime error: integer overflow" tests/trap/add_i32.nge
 runner_check "compile error" 1 "" "use of moved value" tests/err/move_then_use.nge

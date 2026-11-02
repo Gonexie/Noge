@@ -46,6 +46,12 @@ red ticks = 20
 ring pushed = 4
 ring total = 1000" 0
 
+expect machine-sep "stack machine result = -40
+green ticks = 12
+red ticks = 20
+ring pushed = 4
+ring total = 1000" 0
+
 expect blinky "blinky: six half-periods" 0
 # The registers the blinky touched, in order: clock enable, pin configuration, then six LED changes
 # (BSRR bit 29 resets PC13, which lights the active-low LED; bit 13 sets it again).

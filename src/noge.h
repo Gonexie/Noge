@@ -184,7 +184,8 @@ typedef struct Inst {
     Type **types;     /* per parameter: the type argument (NULL for a const parameter) */
     uint64_t *vals;   /* per parameter: the value of a const argument */
     Type **ctypes;    /* per parameter: the type of a const parameter (NULL for a type parameter) */
-    int id;           /* 1, 2, 3, ...: tells the instances apart in the emitted C */
+    unsigned id;      /* a hash of what it is an instance of: tells instances apart in the emitted C, and stays
+                         the same when unrelated code changes, so that the C of other modules does not */
     int line;         /* where it was first asked for */
     const char *name; /* for messages: Pair<i32, bool> */
     struct Inst *next;
@@ -201,6 +202,7 @@ typedef struct Import {
 } Import;
 struct Module {
     int id;
+    const char *tag;   /* six hex digits from the path (relative to the program's folder): part of its C names */
     const char *path;
     Import *imports;
     Node *decls;

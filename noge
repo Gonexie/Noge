@@ -5,6 +5,7 @@
 #   ./noge -O my/hello.nge       same, but optimised (gcc -O2): slower to build, faster to run
 #   ./noge --gcc my/hello.nge    use gcc even when tcc is installed
 #   ./noge --emit-c my/hello.nge print the C that Noge writes, and do not run anything
+#   ./noge --build-dir=DIR my/big.nge   keep one C file per module in DIR and rebuild only the ones a change touches
 #
 # The first time, it builds the Noge compiler (needs make and gcc). If tcc is installed it is used
 # for the C: it is far faster than gcc, which is what you want while experimenting. Nothing is left
@@ -24,6 +25,7 @@ Compiles a Noge program and runs it.
   -O          optimise (gcc -O2): slower to build, faster to run
   --gcc       use gcc even if tcc is installed
   --emit-c    print the generated C instead of running the program
+  --build-dir=DIR  keep a C file per module in DIR (made if needed) and, next time, rebuild only what changed
   -h, --help  show this text
 
 Examples:   ./noge my/hello.nge
@@ -34,12 +36,14 @@ EOF
 opt=0
 force_gcc=0
 emit=0
+build_dir=
 file=
 while [ $# -gt 0 ]; do
     case "$1" in
     -O) opt=1 ;;
     --gcc) force_gcc=1 ;;
     --emit-c) emit=1 ;;
+    --build-dir=*) build_dir=${1#--build-dir=} ;;
     -h | --help)
         usage
         exit 0
@@ -108,6 +112,32 @@ if [ "$emit" = 1 ]; then
 fi
 
 cc=${CC:-cc}
+
+# --build-dir: one C file per module in a folder that stays, built by the Makefile nogec writes there. A file that
+# did not change is not rewritten, so make compiles only what a change touched; the compiler and its flags are
+# remembered, and a different set rebuilds everything.
+if [ -n "$build_dir" ]; then
+    mkdir -p "$build_dir" || { echo "noge: cannot create '$build_dir'" >&2; exit 2; }
+    stem=$(basename "$file" .nge)
+    nflags=
+    cflags=
+    if [ "$force_gcc" = 0 ] && [ "$opt" = 0 ] && command -v tcc >/dev/null 2>&1; then
+        cc=tcc
+        nflags=--no-builtins
+    elif [ "$opt" = 1 ]; then
+        cflags=-O2
+    fi
+    # shellcheck disable=SC2086
+    "$nogec" $nflags --emit-dir="$build_dir" "$file" || exit 1
+    jobs=$(nproc 2>/dev/null || echo 2)
+    if ! make -s -j "$jobs" -C "$build_dir" CC="$cc" CFLAGS="$cflags" >"$tmp/cc.log" 2>&1; then
+        echo "noge: the C compiler could not build the program. That is a bug in Noge; please send me this:" >&2
+        cat "$tmp/cc.log" >&2
+        exit 2
+    fi
+    "$build_dir/$stem"
+    exit $?
+fi
 
 # Fast path: tcc. It lacks gcc's overflow functions, so Noge writes plain C checks instead
 # (--no-builtins); the program behaves the same. If tcc cannot build it, fall through to gcc.

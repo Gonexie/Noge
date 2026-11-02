@@ -55,6 +55,31 @@ static char *join_dir(const char *file, const char *rel) {
     return normalize(both);
 }
 
+static unsigned fnv(const char *s, unsigned h) {
+    for (; *s; s++) h = (h ^ (unsigned char)*s) * 16777619u;
+    return h;
+}
+
+/* The path as it will not change with where nogec is run from: relative to the program's own folder, or std/... */
+static const char *stable_path(const char *path) {
+    if (g_nmodules > 0) {
+        const char *root = g_modules[0]->path;
+        const char *slash = strrchr(root, '/');
+        size_t dn = slash ? (size_t)(slash - root + 1) : 0;
+        if (dn && strncmp(path, root, dn) == 0) return path + dn;
+        if (g_std_dir) {
+            char *sd = normalize(g_std_dir);
+            size_t n = strlen(sd);
+            if (strncmp(path, sd, n) == 0 && path[n] == '/') {
+                char *r = arena_alloc(&g_arena, strlen(path) + 8);
+                sprintf(r, "std/%s", path + n + 1);
+                return r;
+            }
+        }
+    }
+    return path;
+}
+
 static Module *new_module(const char *path) {
     if (g_nmodules == cap) {
         int ncap = cap ? cap * 2 : 8;
@@ -71,6 +96,19 @@ static Module *new_module(const char *path) {
     Module *m = ARENA_NEW(&g_arena, Module);
     m->id = g_nmodules;
     m->path = path;
+    unsigned h = fnv(stable_path(path), 2166136261u) & 0xffffffu;
+    for (bool clash = true; clash;) { /* six hex digits can clash: then the next number */
+        clash = false;
+        for (int i = 0; i < g_nmodules; i++) {
+            char t[8];
+            snprintf(t, sizeof t, "%06x", h);
+            if (strcmp(g_modules[i]->tag, t) == 0) clash = true;
+        }
+        if (clash) h = (h + 1) & 0xffffffu;
+    }
+    char *tag = arena_alloc(&g_arena, 8);
+    snprintf(tag, 8, "%06x", h);
+    m->tag = tag;
     g_modules[g_nmodules++] = m;
     return m;
 }

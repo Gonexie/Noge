@@ -449,6 +449,42 @@ static Inst *find_inst(Node *tpl, Type **types, uint64_t *vals, int n) {
     return NULL;
 }
 
+/* An id for an instance that depends only on what it is an instance of (the declaration's file and name, and the
+ * arguments), not on how many instances came before it: unrelated changes then leave its C name alone. */
+static uint32_t id_table[1 << 16]; /* the ids given out; 0 is empty */
+static uint32_t stable_inst_id(Node *tpl, Type **types, uint64_t *vals, int n) {
+    uint32_t h = 2166136261u;
+    const char *parts[2] = {tpl->mod ? g_modules[tpl->mod]->tag : "", NULL};
+    for (const char *p = parts[0]; *p; p++) h = (h ^ (unsigned char)*p) * 16777619u;
+    for (int i = 0; i < tpl->name.n; i++) h = (h ^ (unsigned char)tpl->name.p[i]) * 16777619u;
+    for (int k = 0; k < n; k++) {
+        h = (h ^ '<') * 16777619u;
+        if (types[k]) {
+            for (const char *p = types[k]->cname; *p; p++) h = (h ^ (unsigned char)*p) * 16777619u;
+        } else {
+            for (int b = 0; b < 8; b++) h = (h ^ (unsigned char)(vals[k] >> (8 * b))) * 16777619u;
+        }
+    }
+    if (h == 0) h = 1;
+    for (;;) { /* a clash with another instance's id: take the next number */
+        uint32_t slot = h & 0xffff;
+        bool clash = false;
+        for (;; slot = (slot + 1) & 0xffff) {
+            if (!id_table[slot]) break;
+            if (id_table[slot] == h) {
+                clash = true;
+                break;
+            }
+        }
+        if (!clash) {
+            id_table[slot] = h;
+            return h;
+        }
+        h++;
+        if (h == 0) h = 1;
+    }
+}
+
 static Inst *new_inst(Node *tpl, Type **types, uint64_t *vals, Type **ctypes, int n, int line) {
     if (n_insts >= MAX_INSTS)
         die(line, "more than %d generic instances: does a generic function call itself with a bigger type each time?",
@@ -463,7 +499,8 @@ static Inst *new_inst(Node *tpl, Type **types, uint64_t *vals, Type **ctypes, in
     memcpy(r->types, types, sizeof(Type *) * (size_t)n);
     memcpy(r->vals, vals, sizeof(uint64_t) * (size_t)n);
     memcpy(r->ctypes, ctypes, sizeof(Type *) * (size_t)n);
-    r->id = ++n_insts;
+    n_insts++;
+    r->id = stable_inst_id(tpl, types, vals, n);
     r->line = line;
     r->name = inst_display(tpl, types, vals, ctypes, line);
     r->next = tpl->inst;
@@ -501,7 +538,7 @@ static Type *instantiate_type(Node *tpl, Type **types, uint64_t *vals, Type **ct
     t->nleaves = is_enum ? 1 : 0;
     t->name = r->name;
     char *cn = arena_alloc(&g_arena, (size_t)tpl->name.n + 24);
-    snprintf(cn, (size_t)tpl->name.n + 24, "%c%d_%.*s", is_enum ? 'e' : 's', r->id, SF(tpl->name));
+    snprintf(cn, (size_t)tpl->name.n + 24, "%c%x_%.*s", is_enum ? 'e' : 's', r->id, SF(tpl->name));
     t->cname = cn;
     t->decl = d;
     t->is_copy = d->op != 0;
@@ -1983,7 +2020,7 @@ Node *check_program(Node *program) {
             t->name = arena_strn(&g_arena, d->name.p, d->name.n);
             char *cn = arena_alloc(&g_arena, (size_t)d->name.n + 24);
             if (d->mod == 0) snprintf(cn, (size_t)d->name.n + 24, "%c_%.*s", d->kind == N_ENUM ? 'e' : 's', SF(d->name));
-            else snprintf(cn, (size_t)d->name.n + 24, "%cm%d_%.*s", d->kind == N_ENUM ? 'e' : 's', d->mod, SF(d->name));
+            else snprintf(cn, (size_t)d->name.n + 24, "%cm%s_%.*s", d->kind == N_ENUM ? 'e' : 's', g_modules[d->mod]->tag, SF(d->name));
             t->cname = cn;
             t->decl = d;
             t->is_copy = d->op != 0;

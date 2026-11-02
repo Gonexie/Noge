@@ -103,7 +103,7 @@ Notes
 5. Enums and pattern matching. **Done** (see below).
 6. Generics (`Option<T>`, `Arena<T, N>`, `Id<T>` can now be written in the language). **Done** (see below).
 7. Modules and a standard library. **Done** (see below).
-8. Separate compilation: one C file per module, rebuilt only when it changes.
+8. Separate compilation: one C file per module, rebuilt only when it changes. **Done** (see below).
 
 ## Decisions made in milestone 2
 
@@ -430,6 +430,61 @@ module rebuilds only that module; the standard library is small and untested bey
 firmware; two modules that `export` the same C name are not noticed until the linker; a module is identified by its
 normalized path, so one file reached through a symbolic link under two names is loaded twice; fields cannot be made
 private; and nothing here ran on real hardware or with clang's sanitizers (not installed here).
+
+## Decisions made in milestone 8
+
+- **The program is still checked as a whole; the C is what is split.** `nogec --emit-dir=DIR` runs the same front
+  end over every module (0.1 s for 24,000 lines) and then writes `noge_types.h`, a `.c` file per module with
+  functions, and a `Makefile`. No interface files and no separate type checking are needed, and the files cannot
+  disagree with one another: a generic function's instances are written into the module of the *template*, so a
+  new use from `main` changes the library's file, and only that.
+- **A file is written only if its text changed**, so make (or a compiler cache) sees stable timestamps: with no change
+  to the source nothing is rebuilt, and an edit rebuilds the modules whose C really differs. The generated Makefile
+  makes each object depend on the header and on a `.flags` stamp holding the compiler and flags, so a change of either
+  rebuilds all.
+- **The header holds only types** (structs, enums, arrays, pointers), the run-time check machinery and the declarations
+  of `extern` functions. Each `.c` file starts with the prototypes of what it defines and what its code calls, found by
+  walking its IR. So a new function changes one file, not all of them, and only a change to a type changes the header
+  (and so rebuilds everything, as in C).
+- **C names do not depend on what else is in the program.** A module's name in C (`fm<tag>_f`, `sm<tag>_T`) comes from
+  six hex digits of a hash of its path relative to the program's folder (`std/...` for the library), and an
+  instance's from a hash of its template's module and name and its arguments' C names, probing for a free number if two
+  collide. Before, both were counters, so a new instance early on renamed all the later ones, in every file that
+  mentioned them. The file names (`lib_<tag>.c`) do not depend on where `nogec` is run from either.
+- **Failed checks keep naming their file**: every `.c` defines `NOGE_FILE` before including the header. A freestanding
+  program's weak `noge_trap_hook` default is defined in the program's own file only; the header declares it.
+- **The price is inlining.** A call from one module to another is a call between object files, so the C compiler
+  cannot inline it without `-flto`. The firmware example built from separate files is 4 bytes bigger than the one-file
+  build.
+- **Not done:** `nogec` itself does not skip work for unchanged `.nge` files (it always re-checks everything, which is
+  cheap), and it is not run in parallel. `./noge --build-dir=DIR prog.nge` is the one-command way to use all this.
+
+### How milestone 8 was checked
+
+- **`tests/separate_check.py` (`make check-separate`).** All 42 positive programs, all 8 multi-file programs and all 42
+  positive programs cut in two files are built from separate C files with the Makefile nogec writes
+  (`-Wall -Wextra -Wpedantic -Werror`), in both overflow modes: 92 programs, and each prints what the one-file build
+  prints (the failed check in an imported file names that file). Then an incremental scenario on a three-module project
+  looks at which files nogec writes, by content and by modification time, and at how many files `make` compiles:
+  nothing changed (none), a comment after the last line (none), a function body (that module's file, one compile), a new
+  function (the same), another module's body, a new instance of a generic function asked for from `main` (the library's
+  file, `main.c` and the header: three compiles), a new struct (the header: all three), other flags (all), the same
+  flags again (none), and that the names of existing instances survive another being added first and do not depend on
+  where `nogec` is run from. A freestanding build of several modules compiles with `-ffreestanding` and needs nothing
+  from the C library. `tests/run.sh` also builds the multi-file programs this way, so `make test` covers it.
+- **Mutation testing.** 10 deliberate bugs in the new code (a file rewritten although unchanged; prototypes of called
+  functions left out; the wrong file named in a failed check; every file holding every function; the Makefile ignoring
+  the header, or the flags; `main` or `print` in the wrong file; module names depending on the current folder; instance
+  names counting instead of hashing): all 10 are caught.
+- **Firmware.** The Cortex-M example is also built from one C file per module and linked with the board code, and runs
+  under QEMU like the one-file build.
+- **Measured.** On 41 files, 24,000 lines and 2,400 functions: `nogec` 0.10 s; a full `gcc -O2` build from separate files
+  19.0 s (the same program as one C file: 20.9 s, one core each); after editing one function, `nogec` and `make` together
+  0.6 s.
+
+What this does **not** show: the speed-up depends on a change staying inside one module (a type change rebuilds
+everything), parallel builds were not measured (the runner passes `-j`), no other `make` than GNU make was tried, and
+nothing ran on real hardware.
 
 ## Open questions
 - Do we need Hylo-style `subscript` projections to access into containers without copying, or is `inout` on paths plus arenas enough?
