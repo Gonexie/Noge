@@ -1,0 +1,8 @@
+// error: operator '>' needs integer operands, found 'P'
+import "std/vec.nge" as vec;
+copy struct P { a: i32 }
+fn main() -> i32 {
+    var v: vec::Vec<P, 4> = vec::new(P { a: 0 });
+    vec::sort(&v);
+    return 0;
+}

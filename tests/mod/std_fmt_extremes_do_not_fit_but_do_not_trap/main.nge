@@ -1,0 +1,10 @@
+import "std/str.nge" as str;
+import "std/fmt.nge" as fmt;
+import "std/io.nge" as io;
+fn main() -> i32 {
+    var s: str::Str<8> = str::new();
+    print(fmt::append_int_padded(&s, -9223372036854775807 - 1, 30, 32) as i32);
+    print(fmt::append_fixed(&s, -9223372036854775807 - 1, 19) as i32);
+    print(fmt::append_uint(&s, 18446744073709551615) as i32);
+    return 0;
+}

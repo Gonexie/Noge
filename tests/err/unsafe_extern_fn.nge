@@ -1,0 +1,3 @@
+// error: expected 'fn' after 'unsafe'
+unsafe extern "C" fn abs(x: i32) -> i32;
+fn main() -> i32 { return 0; }

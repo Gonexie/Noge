@@ -1,0 +1,2 @@
+// error: 'main' must be declared as
+unsafe fn main() -> i32 { return 0; }

@@ -1,0 +1,35 @@
+import "std/arena.nge" as arena;
+
+copy struct Node { value: i32, next: i32 }
+
+fn main() -> i32 {
+    var a: arena::Arena<Node, 3> = arena::new(Node { value: 0, next: -1 });
+    var ids: [u32; 3] = [0; 3];
+    var n: usize = 0;
+    while n < 4 {
+        match arena::alloc(&a, Node { value: 10 * (n as i32 + 1), next: n as i32 - 1 }) {
+            Option::Some(id) => { ids[n] = arena::index(id); print(ids[n] as i32); }
+            Option::None => { print(-1); }              // the fourth does not fit
+        }
+        n = n + 1;
+    }
+    print(arena::size(a) as i32);                      // 3
+    print(arena::is_full(a) as i32);                   // 1
+    match arena::alloc(&a, Node { value: 0, next: 0 }) { Option::Some(_) => { print(1); } Option::None => { print(0); } }
+    let second: arena::Id<Node> = arena::Id { index: 1 };
+    print(arena::get(a, second).value);                // 20
+    arena::set(&a, second, Node { value: 99, next: 5 });
+    print(arena::get(a, second).value + arena::get(a, second).next);   // 104
+    // an Id from a bigger arena is checked by try_get, not trusted
+    var small: arena::Arena<Node, 2> = arena::new(Node { value: 0, next: 0 });
+    arena::alloc(&small, Node { value: 7, next: 7 });
+    let first: arena::Id<Node> = arena::Id { index: 0 };
+    let unused: arena::Id<Node> = arena::Id { index: 1 };
+    let foreign: arena::Id<Node> = arena::Id { index: 50 };
+    match arena::try_get(small, first) { Option::Some(x) => { print(x.value); } Option::None => { print(-2); } }
+    match arena::try_get(small, unused) { Option::Some(x) => { print(x.value); } Option::None => { print(-2); } }
+    match arena::try_get(small, foreign) { Option::Some(x) => { print(x.value); } Option::None => { print(-2); } }
+    print(arena::capacity(small) as i32);              // 2
+    print(arena::size(small) as i32);                  // 1
+    return 0;
+}

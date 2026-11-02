@@ -1,0 +1,58 @@
+// Printing text to standard output (hosted programs only):   import "std/io.nge" as io;
+//   io::write(s);   io::newline();   io::write_int(-5);   unsafe { io::write_cstr(c"hello\n"); }
+//
+// This calls putchar of the C library, so it needs a hosted build: a program for a microcontroller (--freestanding,
+// --target=cortex-m) that imports and uses it fails to link. There, write the bytes to your serial port yourself,
+// from a std/str.nge string. The built-in `print` writes a single i32 and a newline; this is for everything else.
+
+import "std/str.nge" as str;
+import "std/fmt.nge" as fmt;
+
+extern "C" fn putchar(c: i32) -> i32;
+
+pub fn put(c: u8) {
+    unsafe { putchar(c as i32); }
+}
+
+pub fn newline() { put('\n'); }
+
+pub fn write<const N: usize>(s: str::Str<N>) {
+    var i: usize = 0;
+    while i < s.len {
+        put(s.bytes[i]);
+        i = i + 1;
+    }
+}
+
+pub fn writeln<const N: usize>(s: str::Str<N>) {
+    write(s);
+    newline();
+}
+
+// the bytes up to the 0 at the end; unsafe because p is trusted to point at a C string (c"..." is one)
+pub unsafe fn write_cstr(p: *const u8) {
+    var i: isize = 0;
+    while ptr_read(ptr_offset(p, i)) != 0 {
+        put(ptr_read(ptr_offset(p, i)));
+        i = i + 1;
+    }
+}
+
+pub fn write_uint(x: u64) {
+    var s: str::Str<24> = str::new();
+    fmt::append_uint(&s, x);
+    write(s);
+}
+
+pub fn write_int(x: i64) {
+    var s: str::Str<24> = str::new();
+    fmt::append_int(&s, x);
+    write(s);
+}
+
+// lower case hex digits, at least min_digits of them (at most 64 digits are ever needed)
+pub fn write_hex(x: u64, min_digits: u32) {
+    var s: str::Str<72> = str::new();
+    fmt::append_hex(&s, x, min_digits);
+    write(s);
+}

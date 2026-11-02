@@ -1,0 +1,6 @@
+import "std/bits.nge" as bits;
+fn main() -> i32 {
+    print(bits::next_pow2(0x8000_0000) as i32);
+    print(bits::next_pow2(0x8000_0001) as i32);
+    return 0;
+}

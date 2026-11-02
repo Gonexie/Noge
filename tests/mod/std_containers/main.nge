@@ -1,0 +1,58 @@
+// Vec, Ring, Bitset and Map side by side
+import "std/vec.nge" as vec;
+import "std/ring.nge" as ring;
+import "std/bitset.nge" as bitset;
+import "std/map.nge" as map;
+
+fn main() -> i32 {
+    // Vec: a list with room for 6
+    var v: vec::Vec<i32, 6> = vec::new(0);
+    vec::push(&v, 30); vec::push(&v, 10); vec::push(&v, 20);
+    vec::insert(&v, 1, 15);                                   // 30 15 10 20
+    vec::sort(&v);                                            // 10 15 20 30
+    print(vec::sum(v));                                       // 75
+    match vec::binary_search(v, 20) { Result::Ok(i) => { print(i as i32); } Result::Err(_) => { print(-1); } }   // 2
+    match vec::binary_search(v, 17) { Result::Ok(_) => { print(-1); } Result::Err(i) => { print(100 + i as i32); } }   // 102
+    match vec::remove(&v, 0) { Option::Some(x) => { print(x); } Option::None => { print(-1); } }                  // 10
+    print(vec::size(v) as i32);                               // 3
+    print(vec::extend(&v, [1, 2, 3, 4], 4) as i32);           // 0: only 3 more would fit
+    print(vec::extend(&v, [1, 2, 3, 4], 3) as i32);           // 1
+    print(vec::is_full(v) as i32);                            // 1
+    vec::reverse(&v);
+    match vec::first(v) { Option::Some(x) => { print(x); } Option::None => { print(-1); } }   // 3
+
+    // Ring used as a queue and as a double-ended queue
+    var r: ring::Ring<u8, 3> = ring::new(0);
+    ring::push(&r, 1); ring::push(&r, 2); ring::push(&r, 3);
+    print(ring::push(&r, 4) as i32);                          // 0: full
+    match ring::push_overwrite(&r, 4) { Option::Some(x) => { print(x as i32); } Option::None => { print(-1); } }   // 1
+    ring::pop(&r);                                            // drops 2
+    ring::push_front(&r, 9);
+    match ring::pop_back(&r) { Option::Some(x) => { print(x as i32); } Option::None => { print(-1); } }           // 4
+    match ring::peek(r) { Option::Some(x) => { print(x as i32); } Option::None => { print(-1); } }                // 9
+    match ring::get(r, 1) { Option::Some(x) => { print(x as i32); } Option::None => { print(-1); } }              // 3
+
+    // Bitset: 64 flags
+    var b: bitset::Bitset<2> = bitset::new();
+    bitset::set(&b, 0); bitset::set(&b, 31); bitset::set(&b, 32); bitset::set(&b, 63);
+    print(bitset::count(b) as i32);                           // 4
+    bitset::clear(&b, 31);
+    match bitset::next_set(b, 1) { Option::Some(i) => { print(i as i32); } Option::None => { print(-1); } }       // 32
+    match bitset::first_clear(b) { Option::Some(i) => { print(i as i32); } Option::None => { print(-1); } }       // 1
+    var odd: bitset::Bitset<2> = bitset::new();
+    bitset::set(&odd, 63);
+    print(bitset::is_subset(odd, b) as i32);                  // 1
+    bitset::difference_with(&b, odd);
+    print(bitset::count(b) as i32);                           // 2
+
+    // Map: pairs of key and value
+    var m: map::Map<u8, i32, 3> = map::new(0, 0);
+    map::put(&m, 1, 100); map::put(&m, 2, 200); map::put(&m, 3, 300);
+    print(map::put(&m, 4, 400) as i32);                       // 0: full
+    print(map::put(&m, 2, 222) as i32);                       // 1: replaces
+    print(map::get_or(m, 2, -1));                             // 222
+    match map::remove(&m, 1) { Option::Some(x) => { print(x); } Option::None => { print(-1); } }   // 100
+    match map::key_at(m, 0) { Option::Some(k) => { print(k as i32); } Option::None => { print(-1); } }   // 3: the last moved in
+    print(map::size(m) as i32);                               // 2
+    return 0;
+}

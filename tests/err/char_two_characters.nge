@@ -1,0 +1,2 @@
+// error: a character literal holds exactly one character
+fn main() -> i32 { let c = 'ab'; return 0; }

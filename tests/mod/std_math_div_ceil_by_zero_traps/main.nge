@@ -1,0 +1,6 @@
+import "std/math.nge" as math;
+fn main() -> i32 {
+    print(math::div_ceil(7, 2));
+    print(math::div_ceil(7, 0));
+    return 0;
+}

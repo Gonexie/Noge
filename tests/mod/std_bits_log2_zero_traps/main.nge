@@ -1,0 +1,6 @@
+import "std/bits.nge" as bits;
+fn main() -> i32 {
+    print(bits::log2(1000) as i32);
+    print(bits::log2(0) as i32);
+    return 0;
+}

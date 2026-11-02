@@ -1,0 +1,5 @@
+// error: an array needs at least one element
+copy struct Inner<const N: usize> { a: [u8; N] }
+copy struct Outer<const N: usize> { i: Inner<N> }
+fn make<const N: usize>() { var o: Outer<N>; }
+fn main() -> i32 { make::<0>(); return 0; }

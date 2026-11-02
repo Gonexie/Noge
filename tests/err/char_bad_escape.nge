@@ -1,0 +1,2 @@
+// error: unknown escape '\q' in character literal
+fn main() -> i32 { let c = '\q'; return 0; }

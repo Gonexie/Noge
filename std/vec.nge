@@ -1,6 +1,10 @@
 // A vector with room for N elements and no allocation:   import "std/vec.nge" as vec;
 //   var v: vec::Vec<u8, 16> = vec::new(0);   vec::push(&v, 7);   vec::pop(&v)   (an Option)
-// The elements are copy types; `fill` is what the unused slots hold.
+// The elements are copy types; `fill` is what the unused slots hold. The numbers-only functions (contains,
+// index_of, count, sum, sort and the others that compare) are for elements that < and == work on.
+// A failure to do something (no room, no such place) is a false or a none, never a trap.
+
+import "std/array.nge" as array;
 
 pub copy struct Vec<T, const N: usize> { items: [T; N], len: usize }
 
@@ -32,6 +36,96 @@ pub fn get<T, const N: usize>(v: Vec<T, N>, i: usize) -> Option<T> {
     return Option::Some(v.items[i]);
 }
 
+pub fn first<T, const N: usize>(v: Vec<T, N>) -> Option<T> { return get(v, 0); }
+
+pub fn last<T, const N: usize>(v: Vec<T, N>) -> Option<T> {
+    if v.len == 0 { return Option::None; }
+    return Option::Some(v.items[v.len - 1]);
+}
+
+// false when there is no element i
+pub fn set<T, const N: usize>(v: inout Vec<T, N>, i: usize, x: T) -> bool {
+    if i >= v.len { return false; }
+    v.items[i] = x;
+    return true;
+}
+
 pub fn clear<T, const N: usize>(v: inout Vec<T, N>) {
     v.len = 0;
+}
+
+// keeps the first n elements (nothing happens if there are no more than n)
+pub fn truncate<T, const N: usize>(v: inout Vec<T, N>, n: usize) {
+    if n < v.len { v.len = n; }
+}
+
+// ---- in the middle ----
+
+// puts x at position i (<= size), moving the later elements up; false when there is no room or i is too large
+pub fn insert<T, const N: usize>(v: inout Vec<T, N>, i: usize, x: T) -> bool {
+    if !array::insert(&v.items, v.len, i, x) { return false; }
+    v.len = v.len + 1;
+    return true;
+}
+
+// takes out element i, moving the later elements down; none when there is no element i
+pub fn remove<T, const N: usize>(v: inout Vec<T, N>, i: usize) -> Option<T> {
+    let r = array::remove(&v.items, v.len, i);
+    if i < v.len { v.len = v.len - 1; }
+    return r;
+}
+
+// takes out element i by putting the last one in its place: quick, but it changes the order
+pub fn swap_remove<T, const N: usize>(v: inout Vec<T, N>, i: usize) -> Option<T> {
+    if i >= v.len { return Option::None; }
+    let x = v.items[i];
+    v.len = v.len - 1;
+    v.items[i] = v.items[v.len];
+    return Option::Some(x);
+}
+
+// ---- adding several ----
+
+// the first n elements of an array, if they all fit (false, and nothing is added, if not)
+pub fn extend<T, const N: usize, const M: usize>(v: inout Vec<T, N>, a: [T; M], n: usize) -> bool {
+    if n > N - v.len { return false; }
+    var i: usize = 0;
+    while i < n {
+        v.items[v.len + i] = a[i];
+        i = i + 1;
+    }
+    v.len = v.len + n;
+    return true;
+}
+
+// all of w, if it fits
+pub fn append<T, const N: usize, const M: usize>(v: inout Vec<T, N>, w: Vec<T, M>) -> bool {
+    return extend(&v, w.items, w.len);
+}
+
+// ---- looking at all of them ----
+
+pub fn index_of<T, const N: usize>(v: Vec<T, N>, x: T) -> Option<usize> { return array::index_of(v.items, v.len, x); }
+pub fn contains<T, const N: usize>(v: Vec<T, N>, x: T) -> bool { return array::contains(v.items, v.len, x); }
+pub fn count<T, const N: usize>(v: Vec<T, N>, x: T) -> usize { return array::count(v.items, v.len, x); }
+pub fn sum<T, const N: usize>(v: Vec<T, N>) -> T { return array::sum(v.items, v.len); }
+pub fn min_index<T, const N: usize>(v: Vec<T, N>) -> Option<usize> { return array::min_index(v.items, v.len); }
+pub fn max_index<T, const N: usize>(v: Vec<T, N>) -> Option<usize> { return array::max_index(v.items, v.len); }
+
+// same size and same elements
+pub fn equal<T, const N: usize, const M: usize>(a: Vec<T, N>, b: Vec<T, M>) -> bool {
+    if a.len != b.len { return false; }
+    return array::equal(a.items, b.items, a.len);
+}
+
+// ---- order ----
+
+pub fn reverse<T, const N: usize>(v: inout Vec<T, N>) { array::reverse(&v.items, v.len); }
+pub fn sort<T, const N: usize>(v: inout Vec<T, N>) { array::sort(&v.items, v.len); }
+pub fn heap_sort<T, const N: usize>(v: inout Vec<T, N>) { array::heap_sort(&v.items, v.len); }
+pub fn is_sorted<T, const N: usize>(v: Vec<T, N>) -> bool { return array::is_sorted(v.items, v.len); }
+
+// in a sorted vector: Ok(the first position of x) or Err(where it would have to go)
+pub fn binary_search<T, const N: usize>(v: Vec<T, N>, x: T) -> Result<usize, usize> {
+    return array::binary_search(v.items, v.len, x);
 }

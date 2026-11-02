@@ -105,6 +105,7 @@ Notes
 7. Modules and a standard library. **Done** (see below).
 8. Separate compilation: one C file per module, rebuilt only when it changes. **Done** (see below).
 9. Global state: `static`, `static mut`, `static mut volatile`. **Done** (see below).
+10. A larger standard library: strings and number formatting, checksums, random numbers, sorting, sets, maps. **Done** (see below).
 
 ## Decisions made in milestone 2
 
@@ -534,6 +535,126 @@ What this does **not** show: `volatile` was checked for the one case that matter
 for other peripherals or multi-core use; nothing ran on real hardware; and the flow pass deliberately says nothing about
 how statics are used.
 
+## Decisions made in milestone 10
+
+Milestone 10 grew the standard library from seven small files to seventeen. What can be offered is decided by the
+language, and most of the decisions below are about that.
+
+- **The library is plain Noge and allocates nothing.** Containers carry their capacity in the type (`Vec<T, N>`,
+  `Bitset<W>`, `Str<N>`), failures that come from running out of room are a `false` or a `none` and leave the value as it
+  was, and the failures that are traps are the ones the language has anywhere (overflow, division by zero, an index out
+  of bounds, a shift by too much). Each function's comment says which can happen. A program pays in flash only for the
+  functions it calls: the firmware that imports eight modules and uses most of them is 4,964 bytes at `-Os` with no RAM
+  beyond the stack.
+- **What cannot be written, is not offered.** No function values, so no `map`, `filter`, `sort_by`, `and_then`; no way to
+  fail on purpose, so no `unwrap`, `assert`, `unreachable`; no floats, so numbers are printed as fixed-point
+  (`append_fixed(1234, 2)` is `12.34`); no character type, so a character is a `u8` and text is `Str<N>`. All of these
+  are listed under "Open questions"; the first two are the ones a user will miss most.
+- **Two small language changes, both for the library's sake.**
+  - *`unsafe fn`.* Reading a `c"..."` literal means dereferencing a pointer, and `0x1000 as *const u8` is legal in safe
+    code, so a safe `str::append_cstr(&s, p)` would let safe code read any address. Making the function `unsafe fn`
+    puts the `unsafe` at the call site, where the language already requires it for everything of that kind. The body of an
+    `unsafe fn` is an unsafe block (as in Rust 2021); `main`, `extern` and `export` functions cannot be `unsafe fn`; it can be
+    generic and `pub`. A call from a generic function is checked when the instance is, so the flag travels with the
+    declaration (the instance is a copy of the node).
+  - *Character literals.* `'a'` is an integer literal holding the ASCII code, so it has no type of its own and takes its type
+    from its context like `97` does. Only ASCII, with `\n \r \t \0 \\ \' \" \xHH`. Without them `str::push(&s, 104)` is
+    the way to write "h", which makes every text function unreadable to test and to use.
+- **Conventions that run through the library.**
+  - Arrays have a fixed size but hold a variable amount, so the `array` functions take `n`, the number of elements to
+    look at, and `Vec` is an array and a count that calls them. An `n` larger than the array traps on the first
+    out-of-bounds access (or does nothing if none is made).
+  - Anything that compares (`sort`, `contains`, `max`) is for numbers, `bool`s and enums without data. A struct is refused at the
+    use, with notes that name the std function and the line that asked for it: instances now remember who asked, so the notes
+    read "in `sort<P, 4>`, asked for on line 124 of std/vec.nge" and then "in `sort<P, 4>`, asked for on line 6 of main.nge".
+  - A bit number, a shift count and the value shifted have the same type in Noge, so `bits::set(x, n)` takes `n` of `x`'s type,
+    and one that is not below the width traps; a cast to `u32` would have wrapped (`set(x_u8, 259)` would set bit 3).
+  - Generic code compares with a variable that holds zero (`let z: T = 0;`), not with the literal: `x < 0` for an
+    unsigned `T` is a `-Wtype-limits` warning in the C, and builds are `-Werror`. The old `math::abs` had this fault for every unsigned
+    type; the test that found it is the 8-bit sweep of `abs`.
+- **`array`: two sorts, one search.** `sort` is an insertion sort (stable, quadratic, best for short data) and `heap_sort` is n
+  log n, in place, not stable. `binary_search` returns `Ok` of the *first* position holding the value, or `Err` of the
+  position to insert at, which is what `bisect_left` gives and so is easy to check; on a vector that is not sorted it
+  gives the answer of that same probing sequence.
+- **`ring` is also a double-ended queue** (`push_front`, `pop_back`), and `push_overwrite` drops the oldest element,
+  which is the usual behaviour for a log or sample buffer.
+- **`map` is a row of pairs searched linearly.** No hashing, because a generic hash needs a way to hash a key and there are no
+  bounds to ask for one; tens of entries is what a microcontroller has. `remove` moves the last pair into the gap, and
+  `key_at` / `value_at` walk the pairs in that order.
+- **`bitset` counts words, not bits** (`Bitset<2>` holds 64), because the language has no arithmetic in generic arguments
+  (`Bitset<N / 32 + 1>`). A bit number out of range traps like an array index, since a flag set with a bad number is a bug
+  to stop on.
+- **`str`, `fmt`, `io`.** `Str<N>` is a byte array and a length, so it can hold any byte. Every operation that might not fit is
+  all-or-nothing. Number formatting builds the digits in a scratch buffer first so that a number that does not fit writes
+  nothing. `parse_*` reports the first problem going left to right (`Empty`, `BadDigit`, `Overflow`) and `parse_int` checks the
+  `i64` range only after it has read all the digits. `io` calls `putchar` and is for hosted programs; on a microcontroller the
+  bytes go to a serial port written by the user, as `examples/cortex-m/stdlib.nge` does.
+- **`rand` is PCG32 with the reference seeding**, so `seed_stream(42, 54)` gives the published sequence, and `below` is
+  unbiased (it rejects the first `2^32 mod n` values). `hash` has the CRCs people actually meet (CRC-32 as in zlib, CRC-16 CCITT
+  and Modbus, CRC-8) with the published check values in comments; the 1 KB table of `crc32_fast` is a `static` in the
+  library, generated from the polynomial and checked against zlib.
+- **Things found on the way, in the compiler.** A `static` array or struct holding a zero entry in the middle of non-zero ones
+  was emitted with a bare `{0}` for the zero entry, which GCC and Clang reject under `-Wmissing-braces`: milestone 9's
+  shortcut now applies to the whole initializer only. The notes after an error in a generic instance now name the whole chain
+  and the file of each request. `separate_check.py` did not cope with `make -s`.
+- **Not done:** `map`/`filter`-style functions, `unwrap`/`assert`, floating point, time and date, any I/O but
+  `putchar`, sorting by a key or a struct, a hash map, dynamic strings and anything that needs an allocator.
+
+### How milestone 10 was checked
+
+- **Tests.** The suite is 680 tests with only `gcc` installed (681 with `tcc`, 775 with `clang`, 776 with both). New in it:
+  8 programs that must be rejected for `unsafe fn` and 12 for character literals, a positive program for each, a multi-file
+  one, the nested zero initializers of statics (which fails 21 ways without the fix), 21 `std_*` multi-file programs (12 of
+  them end in a failed check inside a std file, which must say the file and the message), 10 more programs that must be
+  rejected, a freestanding program importing every module but `io` (its object needs nothing from the C library), and
+  checks of the order and number of the notes in nested instances. `main.trap` may now hold several lines, all of which
+  must be on stderr.
+- **Models.** `make check-std` (also part of `make test`, 13 s) builds 63 generated programs and compares each with a Python
+  model that shares no code with the library. `math`: every pair of values of `i8` and `u8`, a stride through `i16` and
+  `u16`, edge values for 32 and 64 bits, with the cases that must trap excluded by a guard written in 64-bit arithmetic
+  (a wrong guard shows up as a trap or a mismatch). `bits`: random and structured words against `int.bit_length`,
+  `bin().count`, `int.to_bytes`; every bit of every `i8`/`u8` and a sample of the wider types. `array`, `vec`, `ring`,
+  `bitset`, `map`: 2,500 to 3,000 random operations each, all of the state mixed into a checksum after every one,
+  against Python lists, `collections.deque`, integers used as bitmasks, and a list of pairs with the same swap-remove.
+  `hash`: `zlib.crc32`, `zlib.adler32`, `binascii.crc_hqx`, and straightforward models of the rest, with the published check
+  values asserted first. `rand`: a model of PCG32 that must first reproduce the six numbers of the reference demo for
+  `pcg32_srandom(42, 54)`; one draw is constructed to land exactly on the rejection threshold. `ascii`: all 256 bytes.
+  `str`, `fmt`: a table of words over a small alphabet in every pairing, with junk after the end of each (nothing may look
+  at it), capacity-overflow cases, C strings of several lengths into strings of several capacities, and 80 random and 40
+  chosen number strings for the parsers. Every program also runs as one C file per module and in both overflow modes, and the
+  results must be equal.
+- **Mutation testing.** Every module's tests were attacked with deliberate bugs until all that matter were caught:
+  363 mutants of the library (off-by-ones, swapped branches, dropped checks, a changed constant) of which 353 are caught
+  and 10 are equivalent (for example, `abs` of zero with `<=`, an insertion sort that is not stable, which numbers cannot
+  show, and a sift-down that goes on after it is done). 16 survived their first run for a real reason and each led to a new case: `equal` of vectors of different lengths, `below`
+  landing on the threshold, `append_cstr`, `from_cstr` and `starts_with` reading a byte past the end (the generated tests did
+  not use C strings at all, and the unused slots of every test string now hold junk), `append_bool`, padding into a string
+  that is too small, `append_fixed` into a tight buffer, `Option`'s `contains`, `or` and `xor` with the empty one in the
+  interesting place, `Result`'s `ok` and `or` on an `Ok`, and `arena::size` of a partly filled arena. Each module was run to a clean result on its own; the one pass over all of them
+  on the final tree was started and stopped to make the commit, and the tests have only been added to since. For the
+  compiler changes 35 mutants (the lexer's escapes and checks, the parser's `unsafe`, the three places `unsafe` is
+  enforced, the zero shortcut, the notes): 32 are caught, 2 are equivalent (`cur_fn` not cleared after a function,
+  and an all-zero static written out in full), and one pointed at a term that turned out to be dead and was removed.
+- **Build matrix** (the whole suite and `check-std`): `gcc -O2`, `gcc -Os`, `gcc -O2` with AddressSanitizer and UBSan,
+  `clang -O2`, `clang -Os`, and the one-step runner with `tcc` for all 21 `std_*` programs. With the sanitizer 4 tests
+  "fail": the freestanding objects reference `__asan_stack_malloc_N`, which matches the `malloc` pattern that check looks
+  for. The compiler itself built with the sanitizers runs the suite (766 tests then), the fuzzer (1,521 damaged programs)
+  and `check-std` without a finding. `check-modules` (46 programs), `check-generics` (800), `check-match` (1,500),
+  `check-separate` (122 programs, also under `make -s` now) and `check-arith` (8 types, 15 operators, 2 modes; 21,844
+  folded results) pass.
+- **Firmware.** `examples/cortex-m/stdlib.nge` uses eight modules (checksums, PCG32, sorting, shuffling, bits, a bitset, a map,
+  strings and number formatting) and prints through semihosting under QEMU: 9 firmware tests pass at `-O0`, `-O1`, `-O2`,
+  `-O3`, `-Os`, and with `--no-builtins` at `-Os` and `-O2`. It is 4,964 bytes at `-Os`, no RAM.
+- **Two real bugs were found by this work**: `math::abs` did not build for unsigned types (a `-Wtype-limits` error in the
+  C), and milestone 9's all-zero shortcut for statics produced C that GCC and Clang reject when a zero entry sits among
+  non-zero ones.
+
+
+What this does **not** show: the library was not run on real hardware (QEMU Cortex-M3 only); `io` was exercised with
+`putchar` on one C library; the PCG32 and checksums are checked against references but not against a second
+implementation of Noge; and "each function's comment says when it traps" is a claim a reader should hold the code to, not
+something the tests prove.
+
 ## Open questions
 - Do we need Hylo-style `subscript` projections to access into containers without copying, or is `inout` on paths plus arenas enough?
 - Copy vs move default for small structs, and for plain enums: `copy enum Color { .. }` has to be written, and
@@ -541,7 +662,10 @@ how statics are used.
 - Modules inside modules (`a::b::c`), re-exports (`pub import`), a `use` that brings in one name, and private fields.
 - Bounds on generic parameters (`T: Ord`), which would let generic code be checked once instead of per instance,
   and would need a trait or interface mechanism.
-- Arithmetic in generic arguments (`Ring<T, N + 1>`).
+- Arithmetic in generic arguments (`Ring<T, N + 1>`); it would let `Bitset<N>` count bits instead of 32-bit words.
+- Function values or closures (`map`, `filter`, `sort_by`, a callback for `Map`), and a `trap()` builtin that would allow `unwrap`,
+  `assert` and `unreachable` in the library; both touch the type system or the emitted C more than the library did.
+- A hash map: it needs a way to say "this key type can be hashed", which is the same question as bounds on generics.
 - Integer patterns: ranges (`0..=9`) and a check that a `match` on a `u8` with all 256 literals is exhaustive.
 - Guards (`pattern if cond`) and `if let`: wait for a program that is clumsy without them.
 - A `switch` on the tag in the generated C for the common simple `match`.

@@ -1,0 +1,38 @@
+import "std/array.nge" as array;
+import "std/rand.nge" as rand;
+
+fn show(a: [i32; 8], n: usize) {
+    var i: usize = 0;
+    while i < n { print(a[i]); i = i + 1; }
+}
+
+fn main() -> i32 {
+    var a: [i32; 8] = [5, 3, 9, 1, 7, 3, 0, 0];
+    print(array::sum(a, 6));                      // 28
+    match array::index_of(a, 6, 3) { Option::Some(i) => { print(i as i32); } Option::None => { print(-1); } }   // 1
+    print(array::count(a, 6, 3) as i32);          // 2
+    match array::max_index(a, 6) { Option::Some(i) => { print(i as i32); } Option::None => { print(-1); } }     // 2
+    array::sort(&a, 6);
+    show(a, 6);                                   // 1 3 3 5 7 9
+    match array::binary_search(a, 6, 3) { Result::Ok(i) => { print(i as i32); } Result::Err(_) => { print(-1); } }   // 1: the first of the 3s
+    match array::binary_search(a, 6, 4) { Result::Ok(i) => { print(i as i32); } Result::Err(i) => { print(100 + i as i32); } }   // 103
+    array::rotate_left(&a, 6, 2);
+    show(a, 6);                                   // 3 5 7 9 1 3
+    array::reverse(&a, 6);
+    show(a, 6);                                   // 3 1 9 7 5 3
+    print(array::insert(&a, 6, 0, 42) as i32);    // 1
+    show(a, 7);                                   // 42 3 1 9 7 5 3
+    match array::remove(&a, 7, 2) { Option::Some(x) => { print(x); } Option::None => { print(-1); } }   // 1
+    var b: [i32; 8] = [0; 8];
+    array::copy(&b, a, 6);
+    print(array::equal(a, b, 6) as i32);          // 1
+    print(array::is_sorted(b, 6) as i32);         // 0
+    array::heap_sort(&b, 6);
+    show(b, 6);                                   // 3 3 5 7 9 42
+    // shuffling keeps the same elements
+    var r = rand::seed(7);
+    rand::shuffle(&r, &b, 6);
+    array::sort(&b, 6);
+    show(b, 6);                                   // 3 3 5 7 9 42
+    return 0;
+}

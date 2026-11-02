@@ -1,0 +1,105 @@
+// The standard library on a microcontroller: strings, number formatting, checksums, random numbers, sorting,
+// bit tricks, a bitset and a map, all in a few KB of RAM, without a C library or an allocator.
+import "std/str.nge" as str;
+import "std/fmt.nge" as fmt;
+import "std/hash.nge" as hash;
+import "std/rand.nge" as rand;
+import "std/array.nge" as array;
+import "std/bits.nge" as bits;
+import "std/bitset.nge" as bitset;
+import "std/map.nge" as map;
+
+extern "C" fn semihost_putbuf(s: [u8; 48]);     // an array is passed as a pointer to its first element
+extern "C" fn semihost_exit(code: i32);
+
+fn say(s: str::Str<48>) {
+    var t = s;
+    str::push(&t, '\n');
+    str::terminate(&t);
+    unsafe { semihost_putbuf(t.bytes); }
+}
+
+fn label(text: *const u8) -> str::Str<48> {
+    var s: str::Str<48> = str::new();
+    unsafe { str::append_cstr(&s, text); }
+    return s;
+}
+
+fn main() -> i32 {
+    var msg = label(c"123456789");
+    var line = label(c"crc32 = ");
+    fmt::append_hex(&line, hash::crc32(msg.bytes, msg.len) as u64, 8);
+    say(line);                                                   // crc32 = cbf43926
+
+    line = label(c"adler32 = ");
+    fmt::append_hex(&line, hash::adler32(msg.bytes, msg.len) as u64, 8);
+    unsafe { str::append_cstr(&line, c", crc16 = "); }
+    fmt::append_hex(&line, hash::crc16_ccitt(msg.bytes, msg.len) as u64, 4);
+    say(line);                                                   // adler32 = 091e01de, crc16 = 29b1
+
+    var r = rand::seed_stream(42, 54);
+    line = label(c"pcg32 = ");
+    fmt::append_hex(&line, rand::next(&r) as u64, 8);
+    str::push(&line, ' ');
+    fmt::append_hex(&line, rand::next(&r) as u64, 8);
+    say(line);                                                   // pcg32 = a15c02b7 7b47f409
+
+    var q = rand::seed(2024);
+    var a: [u32; 8] = [0; 8];
+    var i: usize = 0;
+    while i < 8 { a[i] = rand::below(&q, 100); i = i + 1; }
+    array::sort(&a, 8);
+    line = label(c"sorted:");
+    i = 0;
+    while i < 8 { str::push(&line, ' '); fmt::append_uint(&line, a[i] as u64); i = i + 1; }
+    say(line);
+
+    var deck: [u32; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
+    var s = rand::seed(7);
+    rand::shuffle(&s, &deck, 8);
+    line = label(c"shuffled:");
+    i = 0;
+    while i < 8 { str::push(&line, ' '); fmt::append_uint(&line, deck[i] as u64); i = i + 1; }
+    say(line);
+
+    line = label(c"bits: ");
+    fmt::append_uint(&line, bits::popcount(0xF0F0_F0F0) as u64);
+    str::push(&line, ' ');
+    fmt::append_uint(&line, bits::clz(0x00FF_0000) as u64);
+    str::push(&line, ' ');
+    fmt::append_hex(&line, bits::reverse_bits(1) as u64, 8);
+    say(line);                                                   // bits: 16 8 80000000
+
+    var flags: bitset::Bitset<2> = bitset::new();
+    bitset::set(&flags, 5);
+    bitset::set(&flags, 40);
+    bitset::set(&flags, 63);
+    line = label(c"bitset: ");
+    fmt::append_uint(&line, bitset::count(flags) as u64);
+    unsafe { str::append_cstr(&line, c" set, next after 5 is "); }
+    match bitset::next_set(flags, 6) {
+        Option::Some(n) => { fmt::append_uint(&line, n as u64); }
+        Option::None => { str::push(&line, '-'); }
+    }
+    say(line);                                                   // bitset: 3 set, next after 5 is 40
+
+    var m: map::Map<u8, i32, 4> = map::new(0, 0);
+    map::put(&m, 7, 700);
+    map::put(&m, 9, -3);
+    map::put(&m, 7, 701);
+    line = label(c"map: ");
+    fmt::append_int(&line, map::get_or(m, 7, 0) as i64);
+    str::push(&line, ' ');
+    fmt::append_int(&line, map::get_or(m, 9, 0) as i64);
+    str::push(&line, ' ');
+    fmt::append_int(&line, map::get_or(m, 1, -1) as i64);
+    say(line);                                                   // map: 701 -3 -1
+
+    line = label(c"temperature = ");
+    fmt::append_fixed(&line, -1234, 2);
+    unsafe { str::append_cstr(&line, c" C"); }
+    say(line);                                                   // temperature = -12.34 C
+
+    unsafe { semihost_exit(0); }
+    return 0;
+}

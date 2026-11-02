@@ -1,0 +1,201 @@
+// Numbers to text and back, with no allocation:   import "std/fmt.nge" as fmt;
+//   var s: str::Str<32> = str::new();
+//   fmt::append_int(&s, -42);   fmt::append_hex(&s, 255, 4);   fmt::append_fixed(&s, 1234, 2);   // -420x00ff12.34
+//   fmt::parse_int(s)           a Result<i64, fmt::ParseError>
+//
+// Every append writes at the end of a std/str.nge string, and either all of it fits or (false) nothing is written.
+// Any integer type goes through a cast: fmt::append_int(&s, x as i64), fmt::append_uint(&s, x as u64).
+
+import "std/str.nge" as str;
+import "std/ascii.nge" as ascii;
+import "std/math.nge" as math;
+
+// ---- writing ----
+
+// the digits of x in the given base, last digit first, into buf: how many (at least one)
+fn digits(x: u64, base: u64, buf: inout [u8; 64]) -> usize {
+    var v = x;
+    buf[0] = ascii::hex_digit((v % base) as u32);
+    v = v / base;
+    var n: usize = 1;
+    while v > 0 {
+        buf[n] = ascii::hex_digit((v % base) as u32);
+        v = v / base;
+        n = n + 1;
+    }
+    return n;
+}
+
+// mag in a base, with a minus sign if negative, made `width` characters long with `pad` on the left. With the pad
+// '0' the sign goes in front of the zeros (-007); with any other pad it sits next to the digits (  -7).
+fn put_number<const N: usize>(s: inout str::Str<N>, mag: u64, base: u64, negative: bool, width: u32, pad: u8) -> bool {
+    var buf: [u8; 64] = [0; 64];
+    let nd = digits(mag, base, &buf);
+    var total = nd;
+    if negative { total = total + 1; }
+    var fill: usize = 0;
+    if (width as usize) > total { fill = (width as usize) - total; }
+    if total + fill > N - s.len { return false; }
+    if pad != '0' {
+        var k: usize = 0;
+        while k < fill { str::push(&s, pad); k = k + 1; }
+    }
+    if negative { str::push(&s, '-'); }
+    if pad == '0' {
+        var k: usize = 0;
+        while k < fill { str::push(&s, '0'); k = k + 1; }
+    }
+    var i = nd;
+    while i > 0 {
+        i = i - 1;
+        str::push(&s, buf[i]);
+    }
+    return true;
+}
+
+fn magnitude(x: i64) -> u64 {
+    if x < 0 { return wrapping_sub(0, x as u64); } // also right for the most negative number
+    return x as u64;
+}
+
+pub fn append_uint<const N: usize>(s: inout str::Str<N>, x: u64) -> bool {
+    return put_number(&s, x, 10, false, 0, ' ');
+}
+
+pub fn append_int<const N: usize>(s: inout str::Str<N>, x: i64) -> bool {
+    return put_number(&s, magnitude(x), 10, x < 0, 0, ' ');
+}
+
+// at least `width` characters, with `pad` (such as ' ' or '0') on the left
+pub fn append_uint_padded<const N: usize>(s: inout str::Str<N>, x: u64, width: u32, pad: u8) -> bool {
+    return put_number(&s, x, 10, false, width, pad);
+}
+
+pub fn append_int_padded<const N: usize>(s: inout str::Str<N>, x: i64, width: u32, pad: u8) -> bool {
+    return put_number(&s, magnitude(x), 10, x < 0, width, pad);
+}
+
+// lower case hex digits, no 0x, at least min_digits of them (zero padded): 255, 4 gives 00ff
+pub fn append_hex<const N: usize>(s: inout str::Str<N>, x: u64, min_digits: u32) -> bool {
+    return put_number(&s, x, 16, false, min_digits, '0');
+}
+
+// binary digits, at least min_digits of them
+pub fn append_bin<const N: usize>(s: inout str::Str<N>, x: u64, min_digits: u32) -> bool {
+    return put_number(&s, x, 2, false, min_digits, '0');
+}
+
+pub fn append_bool<const N: usize>(s: inout str::Str<N>, b: bool) -> bool {
+    var t: str::Str<5> = str::new();
+    if b {
+        str::push(&t, 't'); str::push(&t, 'r'); str::push(&t, 'u'); str::push(&t, 'e');
+    } else {
+        str::push(&t, 'f'); str::push(&t, 'a'); str::push(&t, 'l'); str::push(&t, 's'); str::push(&t, 'e');
+    }
+    return str::append(&s, t);
+}
+
+// A fixed-point number: x counts units of 10^-decimals, so append_fixed(1234, 2) writes 12.34 and (-5, 2) writes
+// -0.05. No floating point is involved. False (nothing written) for decimals above 19.
+pub fn append_fixed<const N: usize>(s: inout str::Str<N>, x: i64, decimals: u32) -> bool {
+    if decimals > 19 { return false; }
+    var scale: u64 = 1;
+    var k: u32 = 0;
+    while k < decimals { scale = scale * 10; k = k + 1; }
+    let mag = magnitude(x);
+    var whole_digits: [u8; 64] = [0; 64];
+    let nw = digits(mag / scale, 10, &whole_digits);
+    var frac_digits: [u8; 64] = [0; 64];
+    var nf: usize = 0;
+    if decimals > 0 { nf = digits(mag % scale, 10, &frac_digits); }
+    var total = nw;
+    if x < 0 { total = total + 1; }
+    if decimals > 0 { total = total + 1 + (decimals as usize); }
+    if total > N - s.len { return false; }
+    if x < 0 { str::push(&s, '-'); }
+    var i = nw;
+    while i > 0 {
+        i = i - 1;
+        str::push(&s, whole_digits[i]);
+    }
+    if decimals > 0 {
+        str::push(&s, '.');
+        var z = (decimals as usize) - nf; // the leading zeros of the fraction
+        while z > 0 { str::push(&s, '0'); z = z - 1; }
+        var j = nf;
+        while j > 0 {
+            j = j - 1;
+            str::push(&s, frac_digits[j]);
+        }
+    }
+    return true;
+}
+
+// ---- reading ----
+
+// Empty: no digits; BadDigit: a character that is not a digit of the base; Overflow: the number is too large.
+// Problems are reported for the first one met going left to right.
+pub copy enum ParseError { Empty, BadDigit, Overflow }
+
+fn parse_digits<const N: usize>(s: str::Str<N>, from: usize, base: u64) -> Result<u64, ParseError> {
+    if from >= s.len { return Result::Err(ParseError::Empty); }
+    var acc: u64 = 0;
+    var i = from;
+    while i < s.len {
+        var d: u64 = 0;
+        match ascii::hex_value(s.bytes[i]) {
+            Option::Some(v) => { d = v as u64; }
+            Option::None => { return Result::Err(ParseError::BadDigit); }
+        }
+        if d >= base { return Result::Err(ParseError::BadDigit); }
+        match math::checked_mul(acc, base) {
+            Option::Some(m) => {
+                match math::checked_add(m, d) {
+                    Option::Some(t) => { acc = t; }
+                    Option::None => { return Result::Err(ParseError::Overflow); }
+                }
+            }
+            Option::None => { return Result::Err(ParseError::Overflow); }
+        }
+        i = i + 1;
+    }
+    return Result::Ok(acc);
+}
+
+// decimal digits only (no sign, no spaces)
+pub fn parse_uint<const N: usize>(s: str::Str<N>) -> Result<u64, ParseError> {
+    return parse_digits(s, 0, 10);
+}
+
+// hex digits, either case, without a 0x
+pub fn parse_hex<const N: usize>(s: str::Str<N>) -> Result<u64, ParseError> {
+    return parse_digits(s, 0, 16);
+}
+
+pub fn parse_bin<const N: usize>(s: str::Str<N>) -> Result<u64, ParseError> {
+    return parse_digits(s, 0, 2);
+}
+
+// decimal digits with an optional - or + in front ("-" or "+" alone is a BadDigit); a number outside the range of
+// an i64 is an Overflow once all of it has been read
+pub fn parse_int<const N: usize>(s: str::Str<N>) -> Result<i64, ParseError> {
+    if s.len == 0 { return Result::Err(ParseError::Empty); }
+    var negative = false;
+    var from: usize = 0;
+    if s.bytes[0] == '-' { negative = true; from = 1; }
+    else if s.bytes[0] == '+' { from = 1; }
+    if from == 1 && s.len == 1 { return Result::Err(ParseError::BadDigit); }
+    return match parse_digits(s, from, 10) {
+        Result::Err(e) => Result::Err(e),
+        Result::Ok(mag) => int_from_magnitude(mag, negative),
+    };
+}
+
+fn int_from_magnitude(mag: u64, negative: bool) -> Result<i64, ParseError> {
+    if negative {
+        if mag > 9223372036854775808 { return Result::Err(ParseError::Overflow); }
+        return Result::Ok(wrapping_sub(0, mag) as i64);
+    }
+    if mag > 9223372036854775807 { return Result::Err(ParseError::Overflow); }
+    return Result::Ok(mag as i64);
+}

@@ -1,0 +1,2 @@
+// error: empty character literal
+fn main() -> i32 { let c = ''; return 0; }

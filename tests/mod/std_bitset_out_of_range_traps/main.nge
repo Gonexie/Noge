@@ -1,0 +1,8 @@
+import "std/bitset.nge" as bitset;
+fn main() -> i32 {
+    var b: bitset::Bitset<2> = bitset::new();
+    bitset::set(&b, 63);
+    print(bitset::count(b) as i32);
+    bitset::set(&b, 64);
+    return 0;
+}

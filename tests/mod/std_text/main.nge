@@ -1,0 +1,70 @@
+// Text: std/str.nge (a fixed-size string), std/fmt.nge (numbers to text and back), std/ascii.nge, std/io.nge
+import "std/str.nge" as str;
+import "std/fmt.nge" as fmt;
+import "std/ascii.nge" as ascii;
+import "std/io.nge" as io;
+
+fn show_parse(t: str::Str<24>) {
+    match fmt::parse_int(t) {
+        Result::Ok(v) => { io::write_int(v); }
+        Result::Err(e) => {
+            match e {
+                fmt::ParseError::Empty => { unsafe { io::write_cstr(c"empty"); } }
+                fmt::ParseError::BadDigit => { unsafe { io::write_cstr(c"bad digit"); } }
+                fmt::ParseError::Overflow => { unsafe { io::write_cstr(c"overflow"); } }
+            }
+        }
+    }
+    io::newline();
+}
+
+fn main() -> i32 {
+    var line: str::Str<64> = str::new();
+    unsafe { str::append_cstr(&line, c"temperature = "); }
+    fmt::append_fixed(&line, -1234, 2);
+    unsafe { str::append_cstr(&line, c" C, id 0x"); }
+    fmt::append_hex(&line, 48879, 8);
+    io::writeln(line);                                   // temperature = -12.34 C, id 0x0000beef
+
+    str::to_upper(&line);
+    io::writeln(line);                                   // TEMPERATURE = -12.34 C, ID 0X0000BEEF
+
+    var needle: str::Str<4> = str::new();
+    unsafe { str::append_cstr(&needle, c"ID"); }
+    match str::find(line, needle) {
+        Option::Some(i) => { io::write_uint(i as u64); io::newline(); }   // 24
+        Option::None => { io::writeln(needle); }
+    }
+    print(str::count_byte(line, 'E') as i32);            // 5
+    print(str::starts_with(line, needle) as i32);        // 0
+    print(str::ends_with(line, needle) as i32);          // 0
+
+    // parsing, with the three ways it can go wrong
+    var t: str::Str<24> = str::new();
+    unsafe { str::append_cstr(&t, c"  -42 "); }
+    show_parse(t);                                       // bad digit
+    str::trim(&t);
+    show_parse(t);                                       // -42
+    str::clear(&t);
+    show_parse(t);                                       // empty
+    unsafe { str::append_cstr(&t, c"9223372036854775808"); }
+    show_parse(t);                                       // overflow
+    str::clear(&t);
+    unsafe { str::append_cstr(&t, c"-9223372036854775808"); }
+    show_parse(t);                                       // -9223372036854775808
+
+    // a number that does not fit leaves the string as it was
+    var small: str::Str<4> = str::new();
+    print(fmt::append_int(&small, 1234) as i32);         // 1
+    print(fmt::append_int(&small, 5) as i32);            // 0
+    io::writeln(small);                                  // 1234
+
+    // characters
+    var word: str::Str<8> = str::new();
+    str::push(&word, ascii::to_upper('h'));
+    str::push(&word, 'i');
+    str::push(&word, '!');
+    io::writeln(word);                                   // Hi!
+    unsafe { io::write_cstr(c"done\n"); }
+    return 0;
+}

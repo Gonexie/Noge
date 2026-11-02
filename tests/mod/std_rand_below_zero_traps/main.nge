@@ -1,0 +1,7 @@
+import "std/rand.nge" as rand;
+fn main() -> i32 {
+    var r = rand::seed(1);
+    print((rand::below(&r, 1) == 0) as i32);
+    print(rand::below(&r, 0) as i32);
+    return 0;
+}

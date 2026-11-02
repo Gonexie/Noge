@@ -1,0 +1,13 @@
+import "std/math.nge" as math;
+fn main() -> i32 {
+    print(math::isqrt(0));
+    print(math::isqrt(99));
+    print(math::isqrt(100));
+    print(math::isqrt(-5));
+    print(math::isqrt(2147483647));
+    print(math::map_range(5, 0, 10, 0, 100));
+    print(math::map_range(512, 0, 1023, 0, 255));
+    print(math::map_range(-5, -10, 0, 100, 200));
+    print(math::map_range(7, 0, 10, 100, 0));
+    return 0;
+}

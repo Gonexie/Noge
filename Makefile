@@ -8,6 +8,7 @@ build/nogec: $(SRC) src/noge.h src/ir.h
 
 test: build/nogec
 	@sh tests/run.sh build/nogec
+	@$(MAKE) --no-print-directory check-std
 	@$(MAKE) --no-print-directory test-target
 
 # Firmware for a Cortex-M3, run under QEMU. Skipped (with a note) when the toolchain is not installed.
@@ -36,6 +37,11 @@ check-modules: build/nogec
 check-generics: build/nogec
 	python3 tests/generics_check.py build/nogec
 
+# The standard library against independent models written in Python: exhaustive over every 8-bit value where that is
+# possible, random operation sequences for the containers, zlib for the checksums, the PCG reference for rand.
+check-std: build/nogec
+	python3 tests/std_check.py build/nogec
+
 # Damaged programs must be rejected with a message, never crash the compiler. Build nogec with
 # -fsanitize=address,undefined (see the top of tests/fuzz.py) to make memory errors visible too.
 fuzz: build/nogec
@@ -44,4 +50,4 @@ fuzz: build/nogec
 clean:
 	rm -rf build
 
-.PHONY: test test-target check-arith check-match check-generics check-modules check-separate fuzz clean
+.PHONY: test test-target check-arith check-match check-generics check-modules check-separate check-std fuzz clean

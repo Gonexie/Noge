@@ -1,0 +1,20 @@
+// A character literal is an integer literal holding the ASCII code: it takes its type from its context, like any number.
+fn main() -> i32 {
+    let a: u8 = 'A';
+    print(a as i32);
+    print('z' as i32 - 'a' as i32);
+    print('\n' as i32);
+    print('\'' as i32);
+    print('\\' as i32);
+    print('\x7f' as i32);
+    print('\0' as i32);
+    print('"' as i32);
+    print(' ' as i32);
+    print('\t' as i32);
+    print('\r' as i32);
+    print('\"' as i32);
+    print('\x41' as i32 + '\x0a' as i32);
+    var c: u8 = '7';
+    if c >= '0' && c <= '9' { print((c - '0') as i32); }
+    return 0;
+}

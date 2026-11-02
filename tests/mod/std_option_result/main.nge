@@ -1,0 +1,44 @@
+import "std/option.nge" as option;
+import "std/result.nge" as result;
+
+fn main() -> i32 {
+    var o: Option<i32> = Option::Some(4);
+    let taken = option::take(&o);
+    print(option::unwrap_or(taken, -1));                         // 4
+    print(option::unwrap_or(o, -1));                             // -1
+    let old = option::replace(&o, 9);
+    print(option::is_none(old) as i32);                          // 1
+    print(option::contains(o, 9) as i32);                        // 1
+    print(option::contains(o, 8) as i32);                        // 0
+
+    let nested: Option<Option<i32>> = Option::Some(Option::Some(8));
+    print(option::unwrap_or(option::flatten(nested), 0));        // 8
+    let hollow: Option<Option<i32>> = Option::Some(Option::None);
+    print(option::unwrap_or(option::flatten(hollow), 0));        // 0
+
+    let a: Option<i32> = Option::Some(1);
+    let b: Option<i32> = Option::None;
+    print(option::is_some(option::xor(a, b)) as i32);            // 1
+    print(option::is_some(option::xor(a, a)) as i32);            // 0
+    print(option::unwrap_or(option::or(b, a), 0));               // 1
+    print(option::unwrap_or(option::and(a, Option::Some(5)), 0)); // 5
+
+    let r: Result<i32, bool> = option::ok_or(a, false);
+    print(result::unwrap_or(r, 0));                              // 1
+    let e: Result<i32, i32> = option::ok_or(b, 33);
+    print(result::unwrap_err_or(e, 0));                          // 33
+    print(option::unwrap_or(result::err(e), 0));                 // 33
+    print(option::unwrap_or(result::ok(e), -5));                 // -5
+    let two: Result<i32, i32> = Result::Ok(2);
+    print(result::is_ok(result::or(e, two)) as i32);             // 1
+    let seven: Result<i32, bool> = Result::Ok(7);
+    print(result::is_err(result::and(r, seven)) as i32);         // 0
+    print(option::contains(b, 9) as i32);                        // 0: nothing is not 9
+    print(option::unwrap_or(option::or(a, Option::Some(5)), 0)); // 1: the first one that has a value
+    print(option::unwrap_or(option::xor(b, a), 0));              // 1
+    let okv: Result<i32, bool> = Result::Ok(6);
+    print(option::unwrap_or(result::ok(okv), -5));               // 6
+    let other: Result<i32, bool> = Result::Ok(8);
+    print(result::unwrap_or(result::or(okv, other), 0));         // 6: the first one that is Ok
+    return 0;
+}

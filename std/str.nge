@@ -1,0 +1,260 @@
+// Text in a fixed-size buffer, with no allocation:   import "std/str.nge" as str;
+//   var s: str::Str<32> = str::new();
+//   unsafe { str::append_cstr(&s, c"hello, "); }          text literals are C strings, so reading one is `unsafe`
+//   str::push(&s, 'w');   str::append(&s, other);   str::eq(s, t)   str::find(s, t)
+//
+// A Str<N> holds up to N bytes and knows how many it holds, so it may contain any byte, 0 included. The bytes are
+// treated as ASCII where case matters. Everything that can fail for lack of room says so with a false or a none and
+// leaves the string as it was ("all or nothing"); nothing here traps except what the arithmetic of an index does.
+// A function that takes a Str<M> next to the Str<N> it works on accepts a string of any capacity.
+
+import "std/ascii.nge" as ascii;
+
+pub copy struct Str<const N: usize> { bytes: [u8; N], len: usize }
+
+pub fn new<const N: usize>() -> Str<N> {
+    return Str { bytes: [0; N], len: 0 };
+}
+
+pub fn size<const N: usize>(s: Str<N>) -> usize { return s.len; }
+pub fn capacity<const N: usize>(s: Str<N>) -> usize { return N; }
+pub fn is_empty<const N: usize>(s: Str<N>) -> bool { return s.len == 0; }
+pub fn is_full<const N: usize>(s: Str<N>) -> bool { return s.len == N; }
+
+pub fn clear<const N: usize>(s: inout Str<N>) { s.len = 0; }
+
+// keeps the first n bytes (nothing happens if there are no more than n)
+pub fn truncate<const N: usize>(s: inout Str<N>, n: usize) {
+    if n < s.len { s.len = n; }
+}
+
+// ---- single bytes ----
+
+pub fn push<const N: usize>(s: inout Str<N>, c: u8) -> bool {
+    if s.len == N { return false; }
+    s.bytes[s.len] = c;
+    s.len = s.len + 1;
+    return true;
+}
+
+pub fn pop<const N: usize>(s: inout Str<N>) -> Option<u8> {
+    if s.len == 0 { return Option::None; }
+    s.len = s.len - 1;
+    return Option::Some(s.bytes[s.len]);
+}
+
+pub fn get<const N: usize>(s: Str<N>, i: usize) -> Option<u8> {
+    if i >= s.len { return Option::None; }
+    return Option::Some(s.bytes[i]);
+}
+
+// false when there is no byte i
+pub fn set<const N: usize>(s: inout Str<N>, i: usize, c: u8) -> bool {
+    if i >= s.len { return false; }
+    s.bytes[i] = c;
+    return true;
+}
+
+// ---- putting text in ----
+
+// the first n bytes of an array
+pub fn append_bytes<const N: usize, const M: usize>(s: inout Str<N>, b: [u8; M], n: usize) -> bool {
+    if n > N - s.len { return false; }
+    var i: usize = 0;
+    while i < n {
+        s.bytes[s.len + i] = b[i];
+        i = i + 1;
+    }
+    s.len = s.len + n;
+    return true;
+}
+
+pub fn append<const N: usize, const M: usize>(s: inout Str<N>, t: Str<M>) -> bool {
+    return append_bytes(&s, t.bytes, t.len);
+}
+
+// Text from a C string (c"..." gives one). `unsafe` because p is trusted to point at bytes that end in a 0: a
+// pointer that does not is a way to read anything in memory.
+pub unsafe fn append_cstr<const N: usize>(s: inout Str<N>, p: *const u8) -> bool {
+    var n: usize = 0;
+    while ptr_read(ptr_offset(p, n as isize)) != 0 { n = n + 1; }
+    if n > N - s.len { return false; }
+    var i: usize = 0;
+    while i < n {
+        s.bytes[s.len + i] = ptr_read(ptr_offset(p, i as isize));
+        i = i + 1;
+    }
+    s.len = s.len + n;
+    return true;
+}
+
+// a new Str holding the text, or none if it does not fit; unsafe for the same reason as append_cstr
+pub unsafe fn from_cstr<const N: usize>(p: *const u8) -> Option<Str<N>> {
+    var s: Str<N> = new();
+    if !append_cstr(&s, p) { return Option::None; }
+    return Option::Some(s);
+}
+
+// puts a 0 after the text (false if it is full), so that s.bytes can be handed to a C function that wants a C
+// string (the array is passed as a pointer to its first byte)
+pub fn terminate<const N: usize>(s: inout Str<N>) -> bool {
+    if s.len == N { return false; }
+    s.bytes[s.len] = 0;
+    return true;
+}
+
+// ---- comparing ----
+
+pub fn eq<const N: usize, const M: usize>(a: Str<N>, b: Str<M>) -> bool {
+    if a.len != b.len { return false; }
+    var i: usize = 0;
+    while i < a.len {
+        if a.bytes[i] != b.bytes[i] { return false; }
+        i = i + 1;
+    }
+    return true;
+}
+
+// -1, 0 or 1: dictionary order by byte value (a string that is the start of another comes first)
+pub fn compare<const N: usize, const M: usize>(a: Str<N>, b: Str<M>) -> i32 {
+    var i: usize = 0;
+    while i < a.len && i < b.len {
+        if a.bytes[i] < b.bytes[i] { return -1; }
+        if a.bytes[i] > b.bytes[i] { return 1; }
+        i = i + 1;
+    }
+    if a.len < b.len { return -1; }
+    if a.len > b.len { return 1; }
+    return 0;
+}
+
+// equal when capital and small letters are not told apart
+pub fn eq_ignore_case<const N: usize, const M: usize>(a: Str<N>, b: Str<M>) -> bool {
+    if a.len != b.len { return false; }
+    var i: usize = 0;
+    while i < a.len {
+        if ascii::to_lower(a.bytes[i]) != ascii::to_lower(b.bytes[i]) { return false; }
+        i = i + 1;
+    }
+    return true;
+}
+
+// ---- searching ----
+
+pub fn starts_with<const N: usize, const M: usize>(s: Str<N>, prefix: Str<M>) -> bool {
+    if prefix.len > s.len { return false; }
+    var i: usize = 0;
+    while i < prefix.len {
+        if s.bytes[i] != prefix.bytes[i] { return false; }
+        i = i + 1;
+    }
+    return true;
+}
+
+pub fn ends_with<const N: usize, const M: usize>(s: Str<N>, suffix: Str<M>) -> bool {
+    if suffix.len > s.len { return false; }
+    let off = s.len - suffix.len;
+    var i: usize = 0;
+    while i < suffix.len {
+        if s.bytes[off + i] != suffix.bytes[i] { return false; }
+        i = i + 1;
+    }
+    return true;
+}
+
+// the first position of a byte
+pub fn find_byte<const N: usize>(s: Str<N>, c: u8) -> Option<usize> {
+    var i: usize = 0;
+    while i < s.len {
+        if s.bytes[i] == c { return Option::Some(i); }
+        i = i + 1;
+    }
+    return Option::None;
+}
+
+pub fn count_byte<const N: usize>(s: Str<N>, c: u8) -> usize {
+    var n: usize = 0;
+    var i: usize = 0;
+    while i < s.len {
+        if s.bytes[i] == c { n = n + 1; }
+        i = i + 1;
+    }
+    return n;
+}
+
+// the first position where `needle` occurs (an empty needle is found at 0)
+pub fn find<const N: usize, const M: usize>(s: Str<N>, needle: Str<M>) -> Option<usize> {
+    if needle.len > s.len { return Option::None; }
+    var start: usize = 0;
+    while start + needle.len <= s.len {
+        var i: usize = 0;
+        while i < needle.len && s.bytes[start + i] == needle.bytes[i] { i = i + 1; }
+        if i == needle.len { return Option::Some(start); }
+        start = start + 1;
+    }
+    return Option::None;
+}
+
+pub fn contains<const N: usize, const M: usize>(s: Str<N>, needle: Str<M>) -> bool {
+    return match find(s, needle) {
+        Option::Some(_) => true,
+        Option::None => false,
+    };
+}
+
+// ---- changing ----
+
+pub fn to_upper<const N: usize>(s: inout Str<N>) {
+    var i: usize = 0;
+    while i < s.len {
+        s.bytes[i] = ascii::to_upper(s.bytes[i]);
+        i = i + 1;
+    }
+}
+
+pub fn to_lower<const N: usize>(s: inout Str<N>) {
+    var i: usize = 0;
+    while i < s.len {
+        s.bytes[i] = ascii::to_lower(s.bytes[i]);
+        i = i + 1;
+    }
+}
+
+pub fn reverse<const N: usize>(s: inout Str<N>) {
+    var i: usize = 0;
+    var j = s.len;
+    while i + 1 < j {
+        j = j - 1;
+        let t = s.bytes[i];
+        s.bytes[i] = s.bytes[j];
+        s.bytes[j] = t;
+        i = i + 1;
+    }
+}
+
+// takes white space (ascii::is_space) off both ends
+pub fn trim<const N: usize>(s: inout Str<N>) {
+    var end = s.len;
+    while end > 0 && ascii::is_space(s.bytes[end - 1]) { end = end - 1; }
+    var start: usize = 0;
+    while start < end && ascii::is_space(s.bytes[start]) { start = start + 1; }
+    var i: usize = 0;
+    while start + i < end {
+        s.bytes[i] = s.bytes[start + i];
+        i = i + 1;
+    }
+    s.len = end - start;
+}
+
+// the bytes from position `from` up to (not including) `to`, as a new string; none if that is not inside the text
+pub fn slice<const N: usize>(s: Str<N>, from: usize, to: usize) -> Option<Str<N>> {
+    if from > to || to > s.len { return Option::None; }
+    var r: Str<N> = new();
+    var i = from;
+    while i < to {
+        r.bytes[i - from] = s.bytes[i];
+        i = i + 1;
+    }
+    r.len = to - from;
+    return Option::Some(r);
+}

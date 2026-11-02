@@ -1,0 +1,4 @@
+// error: 'ptr_read' requires an unsafe block
+unsafe fn a(p: *const u8) -> u8 { return ptr_read(p); }
+fn b(p: *const u8) -> u8 { return ptr_read(p); }
+fn main() -> i32 { return 0; }

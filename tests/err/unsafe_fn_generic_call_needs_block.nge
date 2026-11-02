@@ -1,0 +1,3 @@
+// error: calling the unsafe function 'get' requires an unsafe block
+unsafe fn get<T>(p: *const T) -> T { return ptr_read(p); }
+fn main() -> i32 { let x = get(c"a"); return x as i32; }

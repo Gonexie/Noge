@@ -1,0 +1,7 @@
+// error: a string literal needs the c prefix
+import "std/str.nge" as str;
+fn main() -> i32 {
+    var s: str::Str<8> = str::new();
+    unsafe { str::append_cstr(&s, "abc"); }
+    return 0;
+}

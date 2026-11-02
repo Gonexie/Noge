@@ -1,0 +1,6 @@
+// error: type mismatch: expected 'bool', found 'i32'
+import "std/math.nge" as math;
+fn main() -> i32 {
+    print(math::abs(true) as i32);
+    return 0;
+}

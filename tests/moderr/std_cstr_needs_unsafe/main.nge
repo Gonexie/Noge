@@ -1,0 +1,7 @@
+// error: calling the unsafe function 'append_cstr' requires an unsafe block
+import "std/str.nge" as str;
+fn main() -> i32 {
+    var s: str::Str<8> = str::new();
+    str::append_cstr(&s, c"abc");
+    return 0;
+}

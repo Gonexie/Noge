@@ -1,0 +1,50 @@
+// The published test vectors of the checksums, the PCG32 generator, and a few bit tricks and integer functions.
+import "std/hash.nge" as hash;
+import "std/rand.nge" as rand;
+import "std/bits.nge" as bits;
+import "std/math.nge" as math;
+
+fn main() -> i32 {
+    let digits: [u8; 9] = [49, 50, 51, 52, 53, 54, 55, 56, 57];       // "123456789"
+    print(hash::crc32(digits, 9) as i32);                              // 0xCBF43926 = -873187034
+    print(hash::crc32_fast(digits, 9) as i32);                         // the same, through the table
+    print(hash::crc16_ccitt(digits, 9) as i32);                        // 0x29B1 = 10673
+    print(hash::crc16_modbus(digits, 9) as i32);                       // 0x4B37 = 19255
+    print(hash::crc8(digits, 9) as i32);                               // 0xF4 = 244
+    let wiki: [u8; 9] = [87, 105, 107, 105, 112, 101, 100, 105, 97];   // "Wikipedia"
+    print(hash::adler32(wiki, 9) as i32);                              // 0x11E60398 = 300286872
+    var c = hash::CRC32_INIT;                                          // a byte at a time
+    var i: usize = 0;
+    while i < 9 { c = hash::crc32_update(c, digits[i]); i = i + 1; }
+    print(hash::crc32_finish(c) as i32);                               // -873187034
+
+    // the PCG32 demo of the reference implementation: pcg32_srandom(42, 54)
+    var r = rand::seed_stream(42, 54);
+    print(rand::next(&r) as i32);                                      // 0xa15c02b7 = -1587805513
+    print(rand::next(&r) as i32);                                      // 0x7b47f409 = 2068313097
+    print(rand::next(&r) as i32);                                      // 0xba1d3330 = -1172491472
+
+    print(bits::popcount(0xF0F0) as i32);                              // 8
+    print(bits::clz(0x0001_0000) as i32);                              // 15
+    print(bits::ctz(0x0001_0000) as i32);                              // 16
+    print(bits::swap_bytes(0x1234_5678) as i32);                       // 0x78563412 = 2018915346
+    print(bits::reverse_bits(1) as i32);                               // 0x80000000 = -2147483648
+    print(bits::rotl(0x8000_0001, 1) as i32);                          // 3
+    print(bits::next_pow2(1000) as i32);                               // 1024
+    let flags: u8 = 0;
+    print(bits::set(flags, 7) as i32);                                 // 128
+    print(bits::get(0xA5 as u8, 5) as i32);                            // 1
+    print(bits::field(0x00AB_CD00, 8, 8) as i32);                      // 0xCD = 205
+
+    print(math::gcd(84, -36));                                         // 12
+    print(math::lcm(4, 6));                                            // 12
+    print(math::pow(3, 5));                                            // 243
+    print(math::isqrt(1000000));                                       // 1000
+    print(math::rem_euclid(-7, 3));                                    // 2
+    print(math::sign(-9));                                             // -1
+    print(math::div_ceil(7, 2));                                       // 4
+    print(math::align_up(13, 8));                                      // 16
+    match math::checked_add(2147483647, 1) { Option::Some(x) => { print(x); } Option::None => { print(-1); } }   // -1: it does not fit
+    match math::checked_mul(46341, 46340) { Option::Some(x) => { print(x); } Option::None => { print(-1); } }   // 2147441940
+    return 0;
+}

@@ -1,0 +1,6 @@
+import "std/math.nge" as math;
+fn main() -> i32 {
+    print(math::lcm(4, 6));
+    print(math::lcm(100000, 99999));
+    return 0;
+}

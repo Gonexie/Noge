@@ -1,0 +1,162 @@
+// A set of small numbers 0 .. 32*W-1, one bit each, with no allocation:   import "std/bitset.nge" as bitset;
+//   var flags: bitset::Bitset<2> = bitset::new();        // 64 bits
+//   bitset::set(&flags, 5);   bitset::test(flags, 5)   bitset::count(flags)   bitset::first_set(flags)
+//
+// The size is counted in 32-bit words: Bitset<W> holds 32*W bits. A bit number that is out of range traps, as an
+// array index does ("array index out of bounds"). The set operations (union_with and the others) change their first
+// argument and read the second, which must have the same size.
+
+import "std/bits.nge" as bits;
+
+pub copy struct Bitset<const W: usize> { words: [u32; W] }
+
+pub fn new<const W: usize>() -> Bitset<W> {
+    return Bitset { words: [0; W] };
+}
+
+// how many bits it can hold
+pub fn capacity<const W: usize>(b: Bitset<W>) -> usize { return W * 32; }
+
+pub fn set<const W: usize>(b: inout Bitset<W>, i: usize) {
+    b.words[i / 32] = b.words[i / 32] | (1 << ((i % 32) as u32));
+}
+
+pub fn clear<const W: usize>(b: inout Bitset<W>, i: usize) {
+    b.words[i / 32] = b.words[i / 32] & ~(1 << ((i % 32) as u32));
+}
+
+pub fn toggle<const W: usize>(b: inout Bitset<W>, i: usize) {
+    b.words[i / 32] = b.words[i / 32] ^ (1 << ((i % 32) as u32));
+}
+
+// bit i set to `on`
+pub fn put<const W: usize>(b: inout Bitset<W>, i: usize, on: bool) {
+    if on { set(&b, i); } else { clear(&b, i); }
+}
+
+pub fn test<const W: usize>(b: Bitset<W>, i: usize) -> bool {
+    return (b.words[i / 32] >> ((i % 32) as u32)) & 1 == 1;
+}
+
+// every bit off
+pub fn clear_all<const W: usize>(b: inout Bitset<W>) {
+    var k: usize = 0;
+    while k < W {
+        b.words[k] = 0;
+        k = k + 1;
+    }
+}
+
+// every bit on (all 32*W of them)
+pub fn set_all<const W: usize>(b: inout Bitset<W>) {
+    var k: usize = 0;
+    while k < W {
+        b.words[k] = 0xFFFF_FFFF;
+        k = k + 1;
+    }
+}
+
+// how many bits are on
+pub fn count<const W: usize>(b: Bitset<W>) -> usize {
+    var n: usize = 0;
+    var k: usize = 0;
+    while k < W {
+        n = n + (bits::popcount(b.words[k]) as usize);
+        k = k + 1;
+    }
+    return n;
+}
+
+pub fn is_empty<const W: usize>(b: Bitset<W>) -> bool {
+    var k: usize = 0;
+    while k < W {
+        if b.words[k] != 0 { return false; }
+        k = k + 1;
+    }
+    return true;
+}
+
+// ---- finding bits ----
+
+// the lowest bit that is on, at or above `from`
+pub fn next_set<const W: usize>(b: Bitset<W>, from: usize) -> Option<usize> {
+    var i = from;
+    while i < W * 32 {
+        let word = b.words[i / 32] >> ((i % 32) as u32); // the bits of this word from i up
+        if word != 0 { return Option::Some(i + (bits::ctz(word) as usize)); }
+        i = (i / 32 + 1) * 32; // the start of the next word
+    }
+    return Option::None;
+}
+
+pub fn first_set<const W: usize>(b: Bitset<W>) -> Option<usize> { return next_set(b, 0); }
+
+// the lowest bit that is off, at or above `from`
+pub fn next_clear<const W: usize>(b: Bitset<W>, from: usize) -> Option<usize> {
+    var i = from;
+    while i < W * 32 {
+        let word = ~b.words[i / 32] >> ((i % 32) as u32);
+        if word != 0 { return Option::Some(i + (bits::ctz(word) as usize)); }
+        i = (i / 32 + 1) * 32;
+    }
+    return Option::None;
+}
+
+pub fn first_clear<const W: usize>(b: Bitset<W>) -> Option<usize> { return next_clear(b, 0); }
+
+// ---- two sets ----
+
+// a = a | other
+pub fn union_with<const W: usize>(a: inout Bitset<W>, other: Bitset<W>) {
+    var k: usize = 0;
+    while k < W {
+        a.words[k] = a.words[k] | other.words[k];
+        k = k + 1;
+    }
+}
+
+// a = a & other
+pub fn intersect_with<const W: usize>(a: inout Bitset<W>, other: Bitset<W>) {
+    var k: usize = 0;
+    while k < W {
+        a.words[k] = a.words[k] & other.words[k];
+        k = k + 1;
+    }
+}
+
+// a = a without the bits of other
+pub fn difference_with<const W: usize>(a: inout Bitset<W>, other: Bitset<W>) {
+    var k: usize = 0;
+    while k < W {
+        a.words[k] = a.words[k] & ~other.words[k];
+        k = k + 1;
+    }
+}
+
+// a = the bits in exactly one of a and other
+pub fn xor_with<const W: usize>(a: inout Bitset<W>, other: Bitset<W>) {
+    var k: usize = 0;
+    while k < W {
+        a.words[k] = a.words[k] ^ other.words[k];
+        k = k + 1;
+    }
+}
+
+pub fn equal<const W: usize>(a: Bitset<W>, b: Bitset<W>) -> bool {
+    var k: usize = 0;
+    while k < W {
+        if a.words[k] != b.words[k] { return false; }
+        k = k + 1;
+    }
+    return true;
+}
+
+// every bit that is on in a is on in b
+pub fn is_subset<const W: usize>(a: Bitset<W>, b: Bitset<W>) -> bool {
+    var k: usize = 0;
+    while k < W {
+        if a.words[k] & ~b.words[k] != 0 { return false; }
+        k = k + 1;
+    }
+    return true;
+}

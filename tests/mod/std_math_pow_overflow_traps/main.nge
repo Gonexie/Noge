@@ -1,0 +1,6 @@
+import "std/math.nge" as math;
+fn main() -> i32 {
+    print(math::pow(2 as u8, 7) as i32);
+    print(math::pow(2 as u8, 8) as i32);
+    return 0;
+}

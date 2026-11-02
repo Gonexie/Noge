@@ -1,0 +1,7 @@
+// error: copies the value N times, but 'Handle' is not copy
+import "std/vec.nge" as vec;
+struct Handle { id: i32 }
+fn main() -> i32 {
+    var v: vec::Vec<Handle, 4> = vec::new(Handle { id: 0 });
+    return 0;
+}

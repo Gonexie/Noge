@@ -1,0 +1,7 @@
+import "std/bits.nge" as bits;
+fn main() -> i32 {
+    let x: i8 = 5;
+    print(bits::get(x, 2) as i32);
+    print(bits::get(x, -1) as i32);
+    return 0;
+}

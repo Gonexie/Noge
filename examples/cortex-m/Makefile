@@ -13,7 +13,7 @@ GENFLAGS = $(COMMON) -std=c99 -Wpedantic           # the C that nogec writes mus
 LDFLAGS  = $(CPU) -T link.ld -nostartfiles --specs=nano.specs --specs=nosys.specs -Wl,--gc-sections
 
 NOGEFLAGS ?=                                          # for example --no-builtins
-PROGRAMS = hello checks trap systick blinky machine
+PROGRAMS = hello checks trap systick blinky machine stdlib
 ELFS     = $(PROGRAMS:%=build/%.elf) build/blinky-hw.elf build/machine-sep.elf
 
 all: $(ELFS)

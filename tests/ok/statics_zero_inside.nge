@@ -1,0 +1,36 @@
+// An all-zero value inside another value of a static: the emitted C must still spell out every brace
+// (a bare {0} in the middle of an initializer is a -Wmissing-braces warning, and builds are -Werror).
+
+copy struct Pair { a: [u8; 2], b: u8 }
+copy enum Mode { Off, Level(u8) }
+copy struct Cell { mode: Mode, pair: Pair }
+
+static ROWS: [[u8; 3]; 3] = [[1, 2, 3], [0, 0, 0], [4, 5, 6]];
+static ZERO_ROWS: [[u8; 2]; 2] = [[0, 0], [0, 0]];
+static PAIRS: [Pair; 3] = [Pair { a: [0, 0], b: 0 }, Pair { a: [1, 0], b: 2 }, Pair { a: [0, 0], b: 0 }];
+static MODES: [Mode; 3] = [Mode::Off, Mode::Level(7), Mode::Off];
+static CELLS: [Cell; 2] = [Cell { mode: Mode::Off, pair: Pair { a: [0, 0], b: 0 } }, Cell { mode: Mode::Level(3), pair: Pair { a: [0, 9], b: 0 } }];
+static REPEATED: [[Pair; 2]; 2] = [[Pair { a: [0, 0], b: 0 }; 2]; 2];
+static mut TABLE: [[i16; 2]; 3] = [[5, 0], [0, 0], [0, -6]];
+
+fn mode_value(m: Mode) -> i32 {
+    return match m {
+        Mode::Off => 0,
+        Mode::Level(v) => v as i32,
+    };
+}
+
+fn main() -> i32 {
+    print(ROWS[0][1] as i32 + ROWS[1][0] as i32 + ROWS[1][2] as i32 + ROWS[2][2] as i32);   // 2 + 0 + 0 + 6 = 8
+    print(ZERO_ROWS[1][1] as i32);                                                            // 0
+    print(PAIRS[1].a[0] as i32 * 10 + PAIRS[1].b as i32 + PAIRS[0].b as i32 + PAIRS[2].a[1] as i32); // 12
+    print(mode_value(MODES[0]) + mode_value(MODES[1]) * 10 + mode_value(MODES[2]));          // 70
+    print(mode_value(CELLS[1].mode) * 100 + CELLS[1].pair.a[1] as i32 + mode_value(CELLS[0].mode)); // 309
+    print(REPEATED[1][1].b as i32 + REPEATED[0][0].a[1] as i32);                              // 0
+    unsafe {
+        TABLE[1][1] = TABLE[0][0] + TABLE[2][1];                                              // -1
+        print(TABLE[1][1] as i32);                                                            // -1
+        print(TABLE[0][1] as i32 + TABLE[2][0] as i32);                                       // 0
+    }
+    return 0;
+}

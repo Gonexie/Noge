@@ -485,6 +485,27 @@ static uint32_t stable_inst_id(Node *tpl, Type **types, uint64_t *vals, int n) {
     }
 }
 
+/* the notes for an error inside an instance: where it was asked for, and so on outwards (outermost pushed first, as
+ * the notes are printed innermost first); returns how many were pushed */
+/* just the one note for r: while an instance is being built, the notes of the builds around it are still on the stack */
+static int push_one_inst_note(Inst *r) {
+    note_push("in '%s', which was asked for on line %d of %s", note_name(r->name), r->line, r->file);
+    return 1;
+}
+
+int push_inst_notes(Inst *i) {
+    Inst *chain[6];
+    int n = 0;
+    for (; i && n < 6; i = i->parent) chain[n++] = i;
+    for (int k = n - 1; k >= 0; k--)
+        note_push("in '%s', which was asked for on line %d of %s", note_name(chain[k]->name), chain[k]->line, chain[k]->file);
+    return n;
+}
+
+void pop_notes(int n) {
+    while (n-- > 0) note_pop();
+}
+
 static Inst *new_inst(Node *tpl, Type **types, uint64_t *vals, Type **ctypes, int n, int line) {
     if (n_insts >= MAX_INSTS)
         die(line, "more than %d generic instances: does a generic function call itself with a bigger type each time?",
@@ -502,6 +523,8 @@ static Inst *new_inst(Node *tpl, Type **types, uint64_t *vals, Type **ctypes, in
     n_insts++;
     r->id = stable_inst_id(tpl, types, vals, n);
     r->line = line;
+    r->file = g_file;
+    r->parent = cur_fn ? cur_fn->inst : NULL; /* only a function has a body to ask from; the notes of a type being built are on the stack */
     r->name = inst_display(tpl, types, vals, ctypes, line);
     r->next = tpl->inst;
     tpl->inst = r;
@@ -546,7 +569,7 @@ static Type *instantiate_type(Node *tpl, Type **types, uint64_t *vals, Type **ct
     prog_tail->next = d;
     prog_tail = d;
 
-    note_push("in '%s', which was asked for on line %d", note_name(r->name), line);
+    int pushed = push_one_inst_note(r);
     inst_depth++;
     int saved_mod = cur_mod;
     enter_module(tpl->mod);
@@ -571,7 +594,7 @@ static Type *instantiate_type(Node *tpl, Type **types, uint64_t *vals, Type **ct
     enter_module(saved_mod);
     pending[npending++] = d;
     inst_depth--;
-    note_pop();
+    pop_notes(pushed);
     if (inst_depth == 0) finish_pending();
     return t;
 }
@@ -585,7 +608,7 @@ static Node *instantiate_fn(Node *tpl, Type **types, uint64_t *vals, Type **ctyp
     Node *d = clone_decl(tpl, &s);
     d->inst = r;
     r->decl = d;
-    note_push("in '%s', which was asked for on line %d", note_name(r->name), line);
+    int pushed = push_one_inst_note(r);
     inst_depth++;
     int saved_mod = cur_mod;
     enter_module(tpl->mod);
@@ -597,7 +620,7 @@ static Node *instantiate_fn(Node *tpl, Type **types, uint64_t *vals, Type **ctyp
     d->type = d->ty ? resolve_type(d->ty) : ty_unit;
     enter_module(saved_mod);
     inst_depth--;
-    note_pop();
+    pop_notes(pushed);
     prog_tail->next = d;
     prog_tail = d;
     if (inst_depth == 0) finish_pending();
@@ -1221,6 +1244,11 @@ static Type *check_call(Node *n, Type *expect) {
     if (fn->ext == EXT_EXTERN) {
         char what[160];
         snprintf(what, sizeof what, "calling the extern function '%.*s'", SF(n->name));
+        require_unsafe(n, what);
+    }
+    if (fn->unsafe_fn) {
+        char what[160];
+        snprintf(what, sizeof what, "calling the unsafe function '%.*s'", SF(n->name));
         require_unsafe(n, what);
     }
     Type **pre = NULL; /* the argument types, when a generic call has already checked them */
@@ -2045,8 +2073,8 @@ static void check_fn(Node *fn) {
     nlocals = 0;
     depth = 1;
     next_id = 0;
-    unsafe_depth = 0;
-    if (fn->inst) note_push("in '%s', which was asked for on line %d", note_name(fn->inst->name), fn->inst->line);
+    unsafe_depth = fn->unsafe_fn ? 1 : 0; /* the body of an unsafe fn is an unsafe block */
+    int inst_notes = fn->inst ? push_inst_notes(fn->inst) : 0;
     for (Node *p = fn->a; p; p = p->next)
         p->local = declare(p->line, p->name, p->type, p->op == M_INOUT || p->op == M_SET, p->op == M_INOUT || p->op == M_SET,
                            p->op == M_INOUT ? LK_INOUT : p->op == M_SET ? LK_SET : p->op == M_SINK ? LK_SINK : LK_LETPARAM);
@@ -2056,7 +2084,8 @@ static void check_fn(Node *fn) {
     if (next_id) memcpy(fn->linfo, fn_locals, sizeof(LocalInfo) * (size_t)next_id);
     if (fn->type != ty_unit && !always_returns(fn->b))
         die(fn->line, "function '%.*s' does not return a value on every path", SF(fn->name));
-    if (fn->inst) note_pop();
+    pop_notes(inst_notes);
+    cur_fn = NULL;
 }
 
 Node *check_program(Node *program) {
@@ -2185,7 +2214,7 @@ Node *check_program(Node *program) {
     }
     enter_module(0);
     if (!main_fn) die(1, "no 'main' function");
-    if (main_fn->a || main_fn->type != ty_i32 || main_fn->ext != EXT_NONE)
+    if (main_fn->a || main_fn->type != ty_i32 || main_fn->ext != EXT_NONE || main_fn->unsafe_fn)
         die(main_fn->line, "'main' must be declared as 'fn main() -> i32'");
 
     /* 4. bodies (extern functions have none) */

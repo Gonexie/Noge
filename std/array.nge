@@ -1,0 +1,226 @@
+// Algorithms on arrays:   import "std/array.nge" as array;
+//   var a: [i32; 8] = [5, 3, 9, 1, 0, 0, 0, 0];     array::sort(&a, 4);     array::binary_search(a, 4, 9)
+//
+// Most functions take `n`, the number of elements to look at (the first n; the rest of the array is not touched),
+// because an array has a fixed size and what is stored in it is usually less: a Vec is an array and a count. For a
+// whole array write len(a). An `n` larger than the array makes an access out of bounds, which traps.
+// The elements are compared with < == and so on, so these are for numbers (and bool), and they are copied.
+
+pub fn fill<T, const N: usize>(a: inout [T; N], x: T) {
+    var i: usize = 0;
+    while i < N {
+        a[i] = x;
+        i = i + 1;
+    }
+}
+
+pub fn swap_at<T, const N: usize>(a: inout [T; N], i: usize, j: usize) {
+    let t = a[i];
+    a[i] = a[j];
+    a[j] = t;
+}
+
+// the first n elements of src into dst
+pub fn copy<T, const N: usize, const M: usize>(dst: inout [T; N], src: [T; M], n: usize) {
+    var i: usize = 0;
+    while i < n {
+        dst[i] = src[i];
+        i = i + 1;
+    }
+}
+
+// the first n elements are equal
+pub fn equal<T, const N: usize, const M: usize>(a: [T; N], b: [T; M], n: usize) -> bool {
+    var i: usize = 0;
+    while i < n {
+        if a[i] != b[i] { return false; }
+        i = i + 1;
+    }
+    return true;
+}
+
+// ---- searching and counting ----
+
+// the first position holding x
+pub fn index_of<T, const N: usize>(a: [T; N], n: usize, x: T) -> Option<usize> {
+    var i: usize = 0;
+    while i < n {
+        if a[i] == x { return Option::Some(i); }
+        i = i + 1;
+    }
+    return Option::None;
+}
+
+pub fn contains<T, const N: usize>(a: [T; N], n: usize, x: T) -> bool {
+    return match index_of(a, n, x) {
+        Option::Some(_) => true,
+        Option::None => false,
+    };
+}
+
+pub fn count<T, const N: usize>(a: [T; N], n: usize, x: T) -> usize {
+    var c: usize = 0;
+    var i: usize = 0;
+    while i < n {
+        if a[i] == x { c = c + 1; }
+        i = i + 1;
+    }
+    return c;
+}
+
+// the total; traps if it does not fit the type
+pub fn sum<T, const N: usize>(a: [T; N], n: usize) -> T {
+    var s: T = 0;
+    var i: usize = 0;
+    while i < n {
+        s = s + a[i];
+        i = i + 1;
+    }
+    return s;
+}
+
+// the position of the smallest element (the first one, if several are); none when n is 0
+pub fn min_index<T, const N: usize>(a: [T; N], n: usize) -> Option<usize> {
+    if n == 0 { return Option::None; }
+    var best: usize = 0;
+    var i: usize = 1;
+    while i < n {
+        if a[i] < a[best] { best = i; }
+        i = i + 1;
+    }
+    return Option::Some(best);
+}
+
+pub fn max_index<T, const N: usize>(a: [T; N], n: usize) -> Option<usize> {
+    if n == 0 { return Option::None; }
+    var best: usize = 0;
+    var i: usize = 1;
+    while i < n {
+        if a[i] > a[best] { best = i; }
+        i = i + 1;
+    }
+    return Option::Some(best);
+}
+
+// ---- order ----
+
+pub fn is_sorted<T, const N: usize>(a: [T; N], n: usize) -> bool {
+    var i: usize = 1;
+    while i < n {
+        if a[i] < a[i - 1] { return false; }
+        i = i + 1;
+    }
+    return true;
+}
+
+// Sorts the first n elements, smallest first. Insertion sort: stable, fast for short or nearly sorted data, and
+// quadratic for long data (use heap_sort from a few hundred elements on).
+pub fn sort<T, const N: usize>(a: inout [T; N], n: usize) {
+    var i: usize = 1;
+    while i < n {
+        let x = a[i];
+        var j = i;
+        while j > 0 && a[j - 1] > x {
+            a[j] = a[j - 1];
+            j = j - 1;
+        }
+        a[j] = x;
+        i = i + 1;
+    }
+}
+
+fn sift_down<T, const N: usize>(a: inout [T; N], start: usize, end: usize) {
+    var root = start;
+    while 2 * root + 1 < end {
+        var child = 2 * root + 1;
+        if child + 1 < end && a[child] < a[child + 1] { child = child + 1; }
+        if a[root] < a[child] {
+            swap_at(&a, root, child);
+            root = child;
+        } else {
+            return;
+        }
+    }
+}
+
+// Sorts the first n elements, smallest first: n log n at the worst, no extra memory, not stable.
+pub fn heap_sort<T, const N: usize>(a: inout [T; N], n: usize) {
+    if n < 2 { return; }
+    var start = n / 2;
+    while start > 0 {
+        start = start - 1;
+        sift_down(&a, start, n);
+    }
+    var end = n;
+    while end > 1 {
+        end = end - 1;
+        swap_at(&a, 0, end);
+        sift_down(&a, 0, end);
+    }
+}
+
+// In the first n elements, which must be sorted: Ok(the first position holding x), or Err(the position where x
+// would have to go to keep them sorted).
+pub fn binary_search<T, const N: usize>(a: [T; N], n: usize, x: T) -> Result<usize, usize> {
+    var lo: usize = 0;
+    var hi = n;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if a[mid] < x { lo = mid + 1; } else { hi = mid; }
+    }
+    if lo < n && a[lo] == x { return Result::Ok(lo); }
+    return Result::Err(lo);
+}
+
+// ---- moving elements about ----
+
+fn reverse_range<T, const N: usize>(a: inout [T; N], from: usize, to: usize) {
+    var i = from;
+    var j = to;
+    while i + 1 < j {
+        j = j - 1;
+        swap_at(&a, i, j);
+        i = i + 1;
+    }
+}
+
+pub fn reverse<T, const N: usize>(a: inout [T; N], n: usize) {
+    reverse_range(&a, 0, n);
+}
+
+// the first n elements moved k places towards the front, the ones pushed off coming back at the end (k may be
+// larger than n: it counts modulo n)
+pub fn rotate_left<T, const N: usize>(a: inout [T; N], n: usize, k: usize) {
+    if n < 2 { return; }
+    let m = k % n;
+    if m == 0 { return; }
+    reverse_range(&a, 0, m);
+    reverse_range(&a, m, n);
+    reverse_range(&a, 0, n);
+}
+
+// Puts x at position i (<= n) of the first n elements, moving the ones after it up by one. False, and nothing
+// changes, when the array has no room (n == N) or i is beyond n. The caller makes its count one larger.
+pub fn insert<T, const N: usize>(a: inout [T; N], n: usize, i: usize, x: T) -> bool {
+    if n >= N || i > n { return false; }
+    var k = n;
+    while k > i {
+        a[k] = a[k - 1];
+        k = k - 1;
+    }
+    a[i] = x;
+    return true;
+}
+
+// Takes out the element at position i of the first n, moving the ones after it down by one; none if i >= n.
+// The caller makes its count one smaller (the slot n - 1 keeps its old value).
+pub fn remove<T, const N: usize>(a: inout [T; N], n: usize, i: usize) -> Option<T> {
+    if i >= n { return Option::None; }
+    let x = a[i];
+    var k = i;
+    while k + 1 < n {
+        a[k] = a[k + 1];
+        k = k + 1;
+    }
+    return Option::Some(x);
+}

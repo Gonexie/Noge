@@ -11,6 +11,7 @@ make check-match  # slower: random enums and match arms, against a brute-force m
 make check-generics  # slower: random generic programs, against the same programs with every instance written out
 make check-modules   # every positive test cut into two files, against its expected output
 make check-separate  # the same programs built from one C file per module, and what a rebuild touches
+make check-std    # the standard library against independent models in Python (zlib, exhaustive 8-bit tables, ...)
 make fuzz         # damaged programs must be rejected cleanly, never crash the compiler
 make -C examples/cortex-m test   # just the firmware (see examples/cortex-m/README.md)
 
@@ -54,14 +55,16 @@ fn main() -> i32 {
 }
 ```
 
-Items: `fn`, `struct`, `copy struct`, `enum`, `copy enum` (any of the first five can be generic), `const`, `static`,
-`extern "C" fn`, `export "C" fn`, and `import` of another file. Any item can be marked `pub`.
+Items: `fn`, `unsafe fn`, `struct`, `copy struct`, `enum`, `copy enum` (any of the first six can be generic), `const`,
+`static`, `extern "C" fn`, `export "C" fn`, and `import` of another file. Any item can be marked `pub`.
 Types: `i8..i64`, `u8..u64`, `usize`, `isize`, `bool`, `struct` and `enum` (by value, nested), fixed arrays `[T; N]`,
 raw pointers `*mut T` and `*const T`. Statements: `let`, `var`, `if` / `else if` / `else`, `while`, `match`, `return`,
 assignment, `unsafe { }`. Expressions: arithmetic `+ - * / %`, bitwise `& | ^ ~ << >>`, comparison, `&& || !`, `as` casts (between
 integers, from `bool`, between integers and pointers, between pointers), struct literals, array literals `[a, b, c]`
 and `[value; N]`, field access, indexing, C strings `c"text"`. Numbers may be written `255`, `0xFF`, `0b1111` and
-with separators, `0x4002_1018`. Precedence follows Rust (`& | ^` bind tighter than `==`).
+with separators, `0x4002_1018`. A character literal such as `'a'` is a number too, the ASCII code of the character
+(97): it takes its type from its context like any other number, so `let c: u8 = 'a';` and `if c >= '0' && c <= '9'`
+work. The escapes are `\n \r \t \0 \\ \' \" \xHH`; only ASCII characters can be written directly. Precedence follows Rust (`& | ^` bind tighter than `==`).
 
 `inout`, `sink`, `set` and `copy` are keywords only where they can be (in front of a parameter's type, in front of
 `struct` or `enum`); elsewhere they are ordinary names.
@@ -302,17 +305,43 @@ file); after editing one function, `nogec` and `make` took 0.6 s together. The p
 another cannot be inlined by the C compiler (`-flto` brings it back): the firmware example is 4 bytes bigger.
 
 **The standard library** is written in Noge, in the `std/` folder next to the compiler (`--std-dir=DIR` or the
-`NOGE_STD` variable say where it is if the compiler is moved). `import "std/ring.nge" as ring;` loads it.
+`NOGE_STD` variable say where it is if the compiler is moved). `import "std/ring.nge" as ring;` loads it. Nothing in
+it allocates: containers have their size in the type, and text lives in fixed buffers. The whole library is plain
+Noge, so it is checked, generic and portable like your own code, and a program only pays (in flash) for what it calls.
 
 | file                | what it has                                                                              |
 |---------------------|------------------------------------------------------------------------------------------|
 | `std/prelude.nge`   | `Option<T>` and `Result<T, E>`: imported into every module, without asking (`--no-prelude` stops it) |
-| `std/option.nge`    | `is_some`, `is_none`, `unwrap_or`, `or`                                                  |
-| `std/result.nge`    | `is_ok`, `is_err`, `unwrap_or`, `ok`                                                     |
-| `std/math.nge`      | `min`, `max`, `clamp`, `abs`, `swap`, for any type the operators work on                 |
-| `std/vec.nge`       | `Vec<T, N>`: room for N elements, no allocation: `new`, `push`, `pop`, `get`, `size`, `clear` |
-| `std/ring.nge`      | `Ring<T, N>`: a ring buffer: `new`, `push`, `pop`, `size`, `is_full`, `is_empty`        |
-| `std/arena.nge`     | `Arena<T, N>` and the handle `Id<T>`: `new`, `alloc`, `get`, `set`                       |
+| `std/option.nge`    | `is_some`, `is_none`, `contains`, `unwrap_or`, `or`, `and`, `xor`, `flatten`, `take`, `replace`, `ok_or` |
+| `std/result.nge`    | `is_ok`, `is_err`, `unwrap_or`, `unwrap_err_or`, `ok`, `err`, `or`, `and`                |
+| `std/math.nge`      | `min`, `max`, `clamp`, `swap`, `abs`, `sign`, `abs_diff`, `div_ceil`, `rem_euclid`, `align_up`, `gcd`, `lcm`, `pow`, `isqrt`, `map_range`, and `checked_add` / `checked_sub` / `checked_mul` (an `Option` instead of a trap), for any integer type |
+| `std/bits.nge`      | `popcount`, `clz`, `ctz`, `log2`, `next_pow2`, rotates, byte swaps and bit reversal for `u32` and `u64`; `get` / `set` / `clear` / `toggle` / `put` / `is_pow2` for any integer type; `field` / `set_field` for register fields |
+| `std/array.nge`     | on the first `n` elements of an array: `sort`, `heap_sort`, `binary_search`, `reverse`, `rotate_left`, `index_of`, `contains`, `count`, `sum`, `min_index`, `max_index`, `is_sorted`, `insert`, `remove`, `copy`, `equal`, `fill`, `swap_at` |
+| `std/vec.nge`       | `Vec<T, N>`: room for N elements: `push`, `pop`, `get`, `set`, `first`, `last`, `insert`, `remove`, `swap_remove`, `truncate`, `extend`, `append`, and the searching and sorting of `array` |
+| `std/ring.nge`      | `Ring<T, N>`: a queue, and a double-ended queue: `push`, `pop`, `push_front`, `pop_back`, `push_overwrite`, `peek`, `peek_back`, `get` |
+| `std/arena.nge`     | `Arena<T, N>` and the handle `Id<T>`: `new`, `alloc`, `get`, `set`, `try_get`            |
+| `std/bitset.nge`    | `Bitset<W>`: 32·W flags: `set`, `clear`, `toggle`, `test`, `count`, `next_set`, `next_clear`, union / intersection / difference / xor, `is_subset` |
+| `std/map.nge`       | `Map<K, V, N>`: up to N key-value pairs: `put`, `get`, `get_or`, `has`, `remove`, `key_at`, `value_at` |
+| `std/ascii.nge`     | `is_digit`, `is_alpha`, `is_space`, `to_upper`, `to_lower`, `hex_value`, ... on a `u8`   |
+| `std/str.nge`       | `Str<N>`: text in a buffer of N bytes: `push`, `append`, `append_cstr`, `eq`, `compare`, `find`, `starts_with`, `trim`, `to_upper`, `slice`, ... |
+| `std/fmt.nge`       | numbers into a `Str` (`append_int`, `append_uint`, `append_hex`, `append_bin`, `append_fixed`, padded forms) and back (`parse_int`, `parse_uint`, `parse_hex`) |
+| `std/io.nge`        | hosted programs only: `write`, `writeln`, `write_int`, `write_hex`, `newline`, `write_cstr` (through `putchar`) |
+| `std/rand.nge`      | PCG32 random numbers: `seed`, `next`, `below` (no bias), `range`, `coin`, `shuffle`; `xorshift32` for tiny chips |
+| `std/hash.nge`      | `crc32` (also a table-driven `crc32_fast`), `crc16_ccitt`, `crc16_modbus`, `crc8`, `adler32`, `fnv1a32`, `fnv1a64`, `xor8`; each also byte by byte |
+
+Every file starts with a comment that says how to use it and what happens at the edges, and the functions are
+documented where they are written, so `std/str.nge` is the reference for strings. A few conventions hold throughout:
+
+- The containers hold `copy` types and are `copy` themselves (`new` takes the value the unused slots hold, since there
+  are no uninitialized arrays). A program that declares its own `Option` or `Result` uses its own.
+- Running out of room, or asking for something that is not there, gives a `false` or a `none`, never a trap. What does
+  trap is what traps anywhere: arithmetic that overflows, a division by zero, an array index out of bounds, a shift by too
+  much (a bit number out of range for `bits::set`, a bit index beyond a `Bitset`). The comment above each function says
+  when.
+- Anything that compares (`sort`, `contains`, `max`) is for numbers, `bool`s and enums without data; a struct is refused
+  where it is used, with a note that says which std function and which line asked for it.
+- There are no functions that take functions (no `map`, `filter`, `sort_by`): the language has no function values yet.
+  Use a `match` or a `while`.
 
 ```
 import "std/ring.nge" as ring;
@@ -328,8 +357,28 @@ fn main() -> i32 {
 }
 ```
 
-The containers hold `copy` types and are `copy` themselves (`new` takes the value the unused slots hold, since there
-are no uninitialized arrays). A program that declares its own `Option` or `Result` uses its own.
+**Text.** There is no string type in the language, only `c"..."` (a pointer to bytes that end in a 0) and byte arrays;
+`std/str.nge` builds the useful part on top of them, and `'a'` is the number 97, so a character is a `u8`:
+
+```
+import "std/str.nge" as str;
+import "std/fmt.nge" as fmt;
+import "std/io.nge" as io;
+
+fn main() -> i32 {
+    var s: str::Str<48> = str::new();                     // text of up to 48 bytes, on the stack
+    unsafe { str::append_cstr(&s, c"temperature = "); }   // reading a c"..." literal is unsafe: the pointer is trusted
+    fmt::append_fixed(&s, -1234, 2);                      // -12.34, from a number of hundredths: no floats needed
+    str::push(&s, ' ');
+    str::push(&s, 'C');
+    io::writeln(s);                                       // temperature = -12.34 C   (hosted programs)
+    return 0;
+}
+```
+
+On a microcontroller leave out `std/io.nge` and hand `s.bytes` (after `str::terminate(&s)`) to your own output routine, as
+`examples/cortex-m/stdlib.nge` does: that program uses most of the library, without a C library, in 4,964 bytes of flash
+and no RAM beyond the stack.
 
 ## Constants
 
@@ -397,6 +446,21 @@ These operations need an `unsafe` block:
 There is no address-of operator, so a pointer to a Noge variable cannot be made; pointers come from addresses, from C,
 or from `c"..."`. That keeps the borrow rules intact: to give C access to a variable, pass it as an `inout`, `set`
 or `let` argument of an `extern` function.
+
+**Unsafe functions.** `unsafe fn name(...)` declares a function the compiler cannot make safe by itself: calling it needs
+an `unsafe { }` block (or another `unsafe fn`), and its own body counts as an unsafe block, so it can use the pointer
+operations freely. It is how a library offers something like "read this C string" without letting safe code do it:
+
+```
+unsafe fn first_byte(p: *const u8) -> u8 { return ptr_read(p); }
+
+fn main() -> i32 {
+    unsafe { print(first_byte(c"A") as i32); }     // 65; outside the block: "calling the unsafe function 'first_byte' requires an unsafe block"
+    return 0;
+}
+```
+
+An `unsafe fn` can be generic and `pub`; `main` and `extern`/`export` functions cannot be `unsafe fn`.
 
 **Calling C.** `extern "C" fn name(params) -> T;` declares a function defined in C. Calling it needs `unsafe`.
 Parameters keep their modes: scalars and pointers are passed by value; `let` / `inout` / `set` structs and scalars
@@ -504,7 +568,6 @@ On a 68,000-line generated program `nogec` takes about 0.25 s; compiling the 9.6
 
 - A `static mut` is the only way to share state with an interrupt handler, and it is unsafe to use; there is no
   type that makes sharing safe (a critical section or atomic type) yet.
-- Arena and handle types (`Arena<T, N>`, `Id<T>`) are in the standard library (`std/arena.nge`).
 - The emitted C relies on what GCC and Clang do for things the C standard leaves implementation-defined:
   converting an out-of-range value to a signed type (`as`, and `<<`), `>>` of a negative value, and `__asm__`
   labels for the extern and export names. 16-bit targets (16-bit `int`) are not supported.
@@ -514,5 +577,8 @@ On a 68,000-line generated program `nogec` takes about 0.25 s; compiling the 9.6
 - Recursion is not restricted yet.
 - The compiler stops at the first error, and the only backend is C.
 - Modules have no re-exports
-  (`pub import`), no `use` to bring one name in, and no nesting (`a::b::c`). The standard library is small. Generics
-  have no bounds. Patterns have no guards, ranges, struct patterns, `if let` or `@` yet, and an enum cannot be passed to C.
+  (`pub import`), no `use` to bring one name in, and no nesting (`a::b::c`). Generics have no bounds. There are no
+  function values or closures, so the standard library has no `map`, `filter` or `sort_by`, and no way to fail on
+  purpose (`unwrap`, `assert`, `unreachable`) because the language has no `trap()`; `match` and the `Option` helpers
+  stand in. There is no floating point (`fmt::append_fixed` prints fixed-point numbers) and no character type (a
+  character is a `u8`). Text is a fixed-size `Str<N>` that you size yourself. Patterns have no guards, ranges, struct patterns, `if let` or `@` yet, and an enum cannot be passed to C.

@@ -1,0 +1,8 @@
+// error: type mismatch: expected 'u8', found 'u32'
+import "std/bits.nge" as bits;
+fn main() -> i32 {
+    let x: u8 = 1;
+    let n: u32 = 3;
+    print(bits::set(x, n) as i32);
+    return 0;
+}

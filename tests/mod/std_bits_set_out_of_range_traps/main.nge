@@ -1,0 +1,7 @@
+import "std/bits.nge" as bits;
+fn main() -> i32 {
+    let flags: u8 = 0;
+    print(bits::set(flags, 7) as i32);
+    print(bits::set(flags, 8) as i32);
+    return 0;
+}

@@ -1,0 +1,2 @@
+// error: a character literal holds one ASCII character
+fn main() -> i32 { let c = 'é'; return 0; }

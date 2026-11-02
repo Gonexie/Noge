@@ -26,7 +26,7 @@ ROUNDS = option("--rounds", 2)
 SEED = option("--seed", 1)
 NOGEC = args[0] if args else "build/nogec"
 
-TOKEN = re.compile(r'//[^\n]*|c?"(?:[^"\\\n]|\\.)*"|[A-Za-z_][A-Za-z0-9_]*|0[xXbB][0-9A-Fa-f_]+|[0-9][0-9_]*|=>|::|->|<<|>>|<=|>=|==|!=|&&|\|\||\S')
+TOKEN = re.compile(r'//[^\n]*|\x27(?:[^\x27\\\n]|\\.[0-9A-Fa-f]*)\x27|c?"(?:[^"\\\n]|\\.)*"|[A-Za-z_][A-Za-z0-9_]*|0[xXbB][0-9A-Fa-f_]+|[0-9][0-9_]*|=>|::|->|<<|>>|<=|>=|==|!=|&&|\|\||\S')
 KEEP = ("import", "pub", "as", "std", "\"lib.nge\"", "fn", "struct", "enum", "match", "let", "var", "while", "if", "else", "return", "copy", "sink", "inout", "set", "unsafe",
         "extern", "export", "const", "true", "false", "as", "_", "|", "=>", "::", "(", ")", "{", "}", "[", "]", ",", ";", ":", "=",
         "+", "-", "*", "/", "<", ">", "&", "0", "1", "255", "i32", "u8", "bool", "x", "Shape", "Circle")

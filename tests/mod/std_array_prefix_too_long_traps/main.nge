@@ -1,0 +1,8 @@
+import "std/array.nge" as array;
+fn main() -> i32 {
+    var a: [i32; 4] = [4, 3, 2, 1];
+    array::reverse(&a, 4);
+    print(a[0]);
+    array::reverse(&a, 5);
+    return 0;
+}

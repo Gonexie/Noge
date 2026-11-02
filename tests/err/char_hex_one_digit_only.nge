@@ -1,0 +1,2 @@
+// error: '\x' needs two hexadecimal digits
+fn main() -> i32 { let c = '\x4'; return 0; }

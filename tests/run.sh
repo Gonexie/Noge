@@ -10,7 +10,7 @@
 #   ffi/*.nge   like ok/, linked with ffi/<name>.c (C code the program calls, and that calls it back)
 #   free/*.nge  built with --freestanding as a -ffreestanding object that must not need stdio or exit
 #   mod/*/      programs of several files: main.nge (and what it imports) must print main.out; a main.trap holds
-#               text that must be on stderr when the run ends in a failed check (status 101)
+#               text that must be on stderr when the run ends in a failed check (status 101): every line of it
 #               The mod/ programs are also built as one C file per module (nogec --emit-dir, then make), and must
 #               print the same.
 #   moderr/*/   main.nge must be rejected, with the text on its first line "// error: <text>" in the message
@@ -25,6 +25,9 @@ CC=${CC:-cc}
 tmp=$(mktemp -d)
 pass=0
 fail=0
+
+# all_lines_in <wanted> <file>: every line of <wanted> is somewhere in <file>
+all_lines_in() { while IFS= read -r l || [ -n "$l" ]; do grep -qF -- "$l" "$2" || return 1; done < "$1"; }
 
 failed() { echo "FAIL $1"; shift; for x in "$@"; do [ -f "$x" ] && cat "$x"; done; fail=$((fail + 1)); }
 
@@ -77,7 +80,7 @@ for mode in "" "--no-builtins"; do
         if [ -f "${d}main.trap" ]; then
             if [ "$code" -ne 101 ]; then
                 failed "$d [$mode]: expected exit status 101, got $code" "$tmp/$b.stderr"
-            elif ! grep -qF -- "$(cat "${d}main.trap")" "$tmp/$b.stderr"; then
+            elif ! all_lines_in "${d}main.trap" "$tmp/$b.stderr"; then
                 failed "$d [$mode]: wanted '$(cat "${d}main.trap")' on stderr" "$tmp/$b.stderr"
             elif ! diff -u "${d}main.out" "$tmp/$b.out" >"$tmp/diff"; then
                 failed "$d [$mode]: wrong output before the failed check" "$tmp/diff"
@@ -196,6 +199,30 @@ for d in tests/moderr/*/; do
         failed "$d: wrong error, wanted '$want'" "$tmp/err"
     fi
 done
+
+# the notes after an error inside nested generic instances come innermost first: the std function that failed, then
+# the std function that asked for it, then the line of the program
+"$NOGEC" -o /dev/null tests/moderr/std_nested_note_names_the_user_line/main.nge 2>"$tmp/err"
+if sed -n 2p "$tmp/err" | grep -q "std/vec.nge" && sed -n 3p "$tmp/err" | grep -q "std_nested_note_names_the_user_line/main.nge" && [ "$(wc -l <"$tmp/err")" -eq 3 ]; then
+    pass=$((pass + 1))
+else
+    failed "the notes of a nested instance are not innermost first, one line each" "$tmp/err"
+fi
+
+# ... and an instance built inside another one is named once, not once for each way of finding out about it
+"$NOGEC" -o /dev/null tests/moderr/generic_nested_type_note_inner/main.nge 2>"$tmp/err"
+if sed -n 2p "$tmp/err" | grep -q "'Inner<0>'" && sed -n 3p "$tmp/err" | grep -q "'Outer<0>'" && [ "$(wc -l <"$tmp/err")" -eq 3 ]; then
+    pass=$((pass + 1))
+else
+    failed "the notes of a nested type instance are wrong" "$tmp/err"
+fi
+
+"$NOGEC" -o /dev/null tests/moderr/generic_nested_type_in_fn_note/main.nge 2>"$tmp/err"
+if sed -n 2p "$tmp/err" | grep -q "'Inner<0>'" && sed -n 3p "$tmp/err" | grep -q "'Outer<0>'" && sed -n 4p "$tmp/err" | grep -q "'make<0>'" && [ "$(wc -l <"$tmp/err")" -eq 4 ]; then
+    pass=$((pass + 1))
+else
+    failed "the notes of a type built inside a generic function are wrong" "$tmp/err"
+fi
 
 for f in tests/err/*.nge; do
     [ -e "$f" ] || continue

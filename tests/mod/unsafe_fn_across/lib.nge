@@ -1,0 +1,7 @@
+pub unsafe fn peek(p: *const u8, i: usize) -> u8 {
+    return ptr_read(ptr_offset(p, i as isize));
+}
+
+pub unsafe fn peek_all<T>(p: *const T) -> T {
+    return ptr_read(p);
+}

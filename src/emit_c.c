@@ -818,8 +818,10 @@ static bool init_is_zero(Node *e) {
     }
 }
 
-static void emit_static_init(Node *e, Type *t) {
-    if (init_is_zero(e)) {
+/* `{0}` is only accepted without a warning as the whole initializer; inside another aggregate the braces of each
+ * level have to be written out (-Wmissing-braces), so only `top` uses the shortcut. */
+static void emit_static_init(Node *e, Type *t, bool top) {
+    if (top && init_is_zero(e)) {
         fputs(is_aggregate(t) ? "{0}" : "0", out);
         return;
     }
@@ -838,7 +840,7 @@ static void emit_static_init(Node *e, Type *t) {
         fputs("{ ", out);
         for (Node *i = e->a; i; i = i->next) {
             fprintf(out, ".m_%.*s = ", SF(i->name));
-            emit_static_init(i->a, i->decl->type);
+            emit_static_init(i->a, i->decl->type, false);
             fputs(i->next ? ", " : " ", out);
         }
         fputc('}', out);
@@ -846,7 +848,7 @@ static void emit_static_init(Node *e, Type *t) {
     case N_ARRAY: /* an array is a struct around the C array */
         fputs("{ { ", out);
         for (Node *x = e->a; x; x = x->next) {
-            emit_static_init(x, t->elem);
+            emit_static_init(x, t->elem, false);
             fputs(x->next ? ", " : " ", out);
         }
         fputs("} }", out);
@@ -854,7 +856,7 @@ static void emit_static_init(Node *e, Type *t) {
     case N_REPEAT:
         fputs("{ { ", out);
         for (uint64_t k = 0; k < e->ival; k++) {
-            emit_static_init(e->a, t->elem);
+            emit_static_init(e->a, t->elem, false);
             fputs(k + 1 < e->ival ? ", " : " ", out);
         }
         fputs("} }", out);
@@ -871,7 +873,7 @@ static void emit_static_init(Node *e, Type *t) {
             Node *f = e->decl->a;
             for (Node *x = e->a; x; x = x->next, f = f->next, k++) {
                 fprintf(out, "%s.f%d = ", k ? ", " : "", k);
-                emit_static_init(x, f->type);
+                emit_static_init(x, f->type, false);
             }
             fputs(" }", out);
         }
@@ -891,7 +893,7 @@ static void emit_static(Node *d, bool define) {
     put_static_ident(d);
     if (define) {
         fputs(" = ", out);
-        emit_static_init(d->a, d->type);
+        emit_static_init(d->a, d->type, true);
     }
     fputs(";\n", out);
 }

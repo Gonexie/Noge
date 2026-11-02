@@ -52,6 +52,16 @@ red ticks = 20
 ring pushed = 4
 ring total = 1000" 0
 
+expect stdlib "crc32 = cbf43926
+adler32 = 091e01de, crc16 = 29b1
+pcg32 = a15c02b7 7b47f409
+sorted: 8 18 25 33 50 57 80 88
+shuffled: 3 8 6 5 1 7 2 4
+bits: 16 8 80000000
+bitset: 3 set, next after 5 is 40
+map: 701 -3 -1
+temperature = -12.34 C" 0
+
 expect blinky "blinky: six half-periods" 0
 # The registers the blinky touched, in order: clock enable, pin configuration, then six LED changes
 # (BSRR bit 29 resets PC13, which lights the active-low LED; bit 13 sets it again).

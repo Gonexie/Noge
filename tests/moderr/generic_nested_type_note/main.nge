@@ -1,0 +1,5 @@
+// error: in 'Outer<0>', which was asked for on line 4 of tests/moderr/generic_nested_type_note/main.nge
+copy struct Inner<const N: usize> { a: [u8; N] }
+copy struct Outer<const N: usize> { i: Inner<N> }
+fn take(o: Outer<0>) { }
+fn main() -> i32 { return 0; }

@@ -2,7 +2,8 @@
 //   var a: arena::Arena<Node, 64> = arena::new(Node { .. });
 //   let id = arena::alloc(&a, node);        an Option<arena::Id<Node>>
 //   arena::get(a, id)   arena::set(&a, id, node)
-// An Id<Node> cannot be used for an Arena of anything else.
+// An Id<Node> cannot be used for an Arena of anything else. Nothing is ever freed (an arena is for data that lives
+// as long as a phase of the program does), which is why an Id is always good for the arena that made it.
 
 pub copy struct Id<T> { index: u32 }
 pub copy struct Arena<T, const N: usize> { items: [T; N], len: usize }
@@ -12,6 +13,8 @@ pub fn new<T, const N: usize>(fill: T) -> Arena<T, N> {
 }
 
 pub fn size<T, const N: usize>(a: Arena<T, N>) -> usize { return a.len; }
+pub fn capacity<T, const N: usize>(a: Arena<T, N>) -> usize { return N; }
+pub fn is_full<T, const N: usize>(a: Arena<T, N>) -> bool { return a.len == N; }
 
 // none when it is full
 pub fn alloc<T, const N: usize>(a: inout Arena<T, N>, v: T) -> Option<Id<T>> {
@@ -25,3 +28,12 @@ pub fn alloc<T, const N: usize>(a: inout Arena<T, N>, v: T) -> Option<Id<T>> {
 pub fn get<T, const N: usize>(a: Arena<T, N>, id: Id<T>) -> T { return a.items[id.index]; }
 
 pub fn set<T, const N: usize>(a: inout Arena<T, N>, id: Id<T>, v: T) { a.items[id.index] = v; }
+
+// none for an Id that is not in this arena (it was made by a bigger one): get would trap
+pub fn try_get<T, const N: usize>(a: Arena<T, N>, id: Id<T>) -> Option<T> {
+    if id.index as usize >= a.len { return Option::None; }
+    return Option::Some(a.items[id.index]);
+}
+
+// the position of an Id, to print or to store as a number
+pub fn index<T>(id: Id<T>) -> u32 { return id.index; }

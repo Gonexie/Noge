@@ -1,0 +1,8 @@
+// error: which was asked for on line 6 of tests/moderr/std_nested_note_names_the_user_line/main.nge
+import "std/vec.nge" as vec;
+copy struct P { a: i32 }
+fn main() -> i32 {
+    var v: vec::Vec<P, 4> = vec::new(P { a: 0 });
+    vec::sort(&v);
+    return 0;
+}

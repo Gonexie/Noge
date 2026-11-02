@@ -1,0 +1,88 @@
+// Pseudo-random numbers:   import "std/rand.nge" as rand;
+//   var r = rand::seed(12345);     rand::next(&r)     rand::below(&r, 6)     rand::shuffle(&r, &deck, 52)
+//
+// PCG32 (XSH-RR, 64 bits of state): small, fast, and good for games, tests and simulation. It is NOT for secrets:
+// anyone who sees a few outputs can predict the rest. The same seed always gives the same numbers, on every target.
+
+pub copy struct Rng { state: u64, inc: u64 }
+
+const MULTIPLIER: u64 = 6364136223846793005;
+
+fn step(r: inout Rng) {
+    r.state = wrapping_add(wrapping_mul(r.state, MULTIPLIER), r.inc);
+}
+
+// Exactly pcg32_srandom_r(initstate, initseq) of the PCG reference code: different sequences give independent
+// streams from the same state.
+pub fn seed_stream(initstate: u64, initseq: u64) -> Rng {
+    var r = Rng { state: 0, inc: (initseq << 1) | 1 };
+    step(&r);
+    r.state = wrapping_add(r.state, initstate);
+    step(&r);
+    return r;
+}
+
+pub fn seed(s: u64) -> Rng { return seed_stream(s, 54); }
+
+// the next 32 random bits
+pub fn next(r: inout Rng) -> u32 {
+    let old = r.state;
+    step(&r);
+    let xorshifted = (((old >> 18) ^ old) >> 27) as u32;
+    let rot = (old >> 59) as u32;
+    return (xorshifted >> rot) | (xorshifted << ((32 - rot) & 31));
+}
+
+pub fn next_u64(r: inout Rng) -> u64 {
+    let hi = next(&r) as u64;
+    let lo = next(&r) as u64;
+    return (hi << 32) | lo;
+}
+
+// a number from 0 to n-1, each equally likely (no modulo bias); n = 0 traps (division by zero)
+pub fn below(r: inout Rng, n: u32) -> u32 {
+    let threshold = wrapping_sub(0, n) % n; // the numbers below this would make some results more likely
+    var x = next(&r);
+    while x < threshold { x = next(&r); }
+    return x % n;
+}
+
+// a number from lo up to hi-1; lo if hi <= lo
+pub fn range(r: inout Rng, lo: i32, hi: i32) -> i32 {
+    if hi <= lo { return lo; }
+    let span = wrapping_sub(hi as u32, lo as u32);
+    return wrapping_add(lo as u32, below(&r, span)) as i32;
+}
+
+pub fn coin(r: inout Rng) -> bool {
+    return next(&r) >> 31 == 1;
+}
+
+// true with probability num/den
+pub fn chance(r: inout Rng, num: u32, den: u32) -> bool {
+    return below(&r, den) < num;
+}
+
+// Shuffles the first n elements of an array (Fisher-Yates: for i from n-1 down to 1, swap element i with element
+// below(i + 1)), every order equally likely.
+pub fn shuffle<T, const N: usize>(r: inout Rng, a: inout [T; N], n: usize) {
+    var i = n;
+    while i > 1 {
+        i = i - 1;
+        let j = below(&r, i as u32 + 1) as usize;
+        let t = a[i];
+        a[i] = a[j];
+        a[j] = t;
+    }
+}
+
+// Marsaglia's xorshift32: one 32-bit state, three shifts, for chips where even PCG is too much. The state is
+// yours (keep it in a variable); it must not be 0, or the numbers are all 0.
+pub fn xorshift32(state: inout u32) -> u32 {
+    var x = state;
+    x = x ^ (x << 13);
+    x = x ^ (x >> 17);
+    x = x ^ (x << 5);
+    state = x;
+    return x;
+}

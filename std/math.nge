@@ -1,5 +1,8 @@
 // import "std/math.nge" as math;     math::min(a, b)
-// These work for any type the comparison or the arithmetic works for: each use is checked as written out.
+//
+// These work for any type the comparison or the arithmetic works for: each use is checked as written out, so
+// `math::gcd(true, false)` is refused where it is written, with a note that says which use asked for it. The integer functions say which
+// integers they are for. Arithmetic traps on overflow, as everywhere: where a function says "traps", that is it.
 
 pub fn min<T>(a: T, b: T) -> T {
     if b < a { return b; }
@@ -17,14 +20,145 @@ pub fn clamp<T>(x: T, lo: T, hi: T) -> T {
     return x;
 }
 
-// the distance from zero; for an unsigned type that is the number itself. -MIN traps, as everywhere.
-pub fn abs<T>(x: T) -> T {
-    if x < 0 { return 0 - x; }
-    return x;
-}
-
 pub fn swap<T>(a: inout T, b: inout T) {
     let t = a;
     a = b;
     b = t;
+}
+
+// ---- sign and distance ----
+// (zero is a variable here, not the literal 0: comparing an unsigned number with a literal 0 is a C compiler warning)
+
+// the distance from zero; for an unsigned type that is the number itself. -MIN traps.
+pub fn abs<T>(x: T) -> T {
+    let z: T = 0;
+    if x < z { return z - x; }
+    return x;
+}
+
+// -1, 0 or 1
+pub fn sign<T>(x: T) -> i32 {
+    let z: T = 0;
+    if x < z { return -1; }
+    if x > z { return 1; }
+    return 0;
+}
+
+// |a - b|, which must fit the type (abs_diff(-100, 100) traps for an i8)
+pub fn abs_diff<T>(a: T, b: T) -> T {
+    if a > b { return a - b; }
+    return b - a;
+}
+
+// ---- division ----
+
+// a / b rounded up (towards +infinity); b = 0 traps
+pub fn div_ceil<T>(a: T, b: T) -> T {
+    let z: T = 0;
+    let q = a / b;
+    let r = a % b;
+    if r != z && ((r < z) == (b < z)) { return q + 1; }
+    return q;
+}
+
+// a % b that is never negative: rem_euclid(-1, 5) is 4 (the % operator gives -1). b = 0 traps.
+pub fn rem_euclid<T>(a: T, b: T) -> T {
+    let z: T = 0;
+    let r = a % b;
+    if r < z {
+        if b < z { return r - b; }
+        return r + b;
+    }
+    return r;
+}
+
+// the smallest multiple of `to` that is >= x (`to` > 0); traps if that does not fit
+pub fn align_up<T>(x: T, to: T) -> T {
+    return div_ceil(x, to) * to;
+}
+
+// ---- number theory ----
+
+// the greatest common divisor, never negative; gcd(0, 0) is 0. Traps for MIN.
+pub fn gcd<T>(a: T, b: T) -> T {
+    var x = abs(a);
+    var y = abs(b);
+    while y != 0 {
+        let t = x % y;
+        x = y;
+        y = t;
+    }
+    return x;
+}
+
+// the least common multiple, never negative; 0 if either is 0. Traps if it does not fit.
+pub fn lcm<T>(a: T, b: T) -> T {
+    let z: T = 0;
+    if a == z || b == z { return z; }
+    return abs(a / gcd(a, b) * b);
+}
+
+// base to the power exp. Traps exactly when the result does not fit.
+pub fn pow<T>(base: T, exp: u32) -> T {
+    var result: T = 1;
+    var b = base;
+    var e = exp;
+    while e > 0 {
+        if e & 1 == 1 { result = result * b; }
+        e = e >> 1;
+        if e > 0 { b = b * b; } // not after the last bit: that square may not fit even when the result does
+    }
+    return result;
+}
+
+// the integer square root, rounded down; 0 for zero and for negative numbers
+pub fn isqrt<T>(x: T) -> T {
+    let z: T = 0;
+    if x <= z { return z; }
+    var lo: T = 1;
+    var hi = x;
+    while lo < hi {
+        let mid = lo + (hi - lo + 1) / 2;
+        if mid <= x / mid { lo = mid; } else { hi = mid - 1; }
+    }
+    return lo;
+}
+
+// ---- scaling ----
+
+// x from the range in_lo..in_hi moved to the range out_lo..out_hi (in_lo != in_hi), rounded towards zero.
+// (x - in_lo) * (out_hi - out_lo) must fit the type: for small types, widen first.
+pub fn map_range<T>(x: T, in_lo: T, in_hi: T, out_lo: T, out_hi: T) -> T {
+    return (x - in_lo) * (out_hi - out_lo) / (in_hi - in_lo) + out_lo;
+}
+
+// ---- arithmetic that says when it did not fit (built on wrapping_*; none of these traps) ----
+
+pub fn checked_add<T>(a: T, b: T) -> Option<T> {
+    let z: T = 0;
+    let r = wrapping_add(a, b);
+    if b > z && r < a { return Option::None; }
+    if b < z && r > a { return Option::None; }
+    return Option::Some(r);
+}
+
+pub fn checked_sub<T>(a: T, b: T) -> Option<T> {
+    let z: T = 0;
+    let r = wrapping_sub(a, b);
+    if b > z && r > a { return Option::None; }
+    if b < z && r < a { return Option::None; }
+    return Option::Some(r);
+}
+
+pub fn checked_mul<T>(a: T, b: T) -> Option<T> {
+    let z: T = 0;
+    if a == z || b == z { return Option::Some(z); }
+    let r = wrapping_mul(a, b);
+    let one: T = 1;
+    if a < z && a + one == z { // a is -1: the product is -b, which does not fit only for MIN (which wraps to itself)
+        if b < z && r < z { return Option::None; }
+        return Option::Some(r);
+    }
+    if r / a != b { return Option::None; } // r / a would trap for a = -1, which was dealt with
+    return Option::Some(r);
 }

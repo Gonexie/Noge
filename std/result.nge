@@ -1,4 +1,7 @@
 // import "std/result.nge" as result;     result::unwrap_or(r, 0)
+//
+// Result<T, E> itself (Ok / Err) comes from the prelude. Like std/option.nge, this has no functions that take a
+// function; use `match`. Nothing in this file traps.
 
 pub fn is_ok<T, E>(r: Result<T, E>) -> bool {
     return match r {
@@ -21,9 +24,42 @@ pub fn unwrap_or<T, E>(r: Result<T, E>, fallback: T) -> T {
     };
 }
 
+// the error, or `fallback` for an Ok
+pub fn unwrap_err_or<T, E>(r: Result<T, E>, fallback: E) -> E {
+    return match r {
+        Result::Ok(_) => fallback,
+        Result::Err(e) => e,
+    };
+}
+
+// the value as an Option, dropping the error
 pub fn ok<T, E>(r: Result<T, E>) -> Option<T> {
     return match r {
         Result::Ok(v) => Option::Some(v),
         Result::Err(_) => Option::None,
+    };
+}
+
+// the error as an Option, dropping the value
+pub fn err<T, E>(r: Result<T, E>) -> Option<E> {
+    return match r {
+        Result::Ok(_) => Option::None,
+        Result::Err(e) => Option::Some(e),
+    };
+}
+
+// a if it is Ok, else b
+pub fn or<T, E>(a: Result<T, E>, b: Result<T, E>) -> Result<T, E> {
+    return match a {
+        Result::Ok(v) => Result::Ok(v),
+        Result::Err(_) => b,
+    };
+}
+
+// b if a is Ok, else a's error
+pub fn and<T, U, E>(a: Result<T, E>, b: Result<U, E>) -> Result<U, E> {
+    return match a {
+        Result::Ok(_) => b,
+        Result::Err(e) => Result::Err(e),
     };
 }

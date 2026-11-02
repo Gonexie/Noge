@@ -1,5 +1,7 @@
 // A ring buffer with room for N elements and no allocation:   import "std/ring.nge" as ring;
 //   var r: ring::Ring<u8, 8> = ring::new(0);   ring::push(&r, 1);   ring::pop(&r)   (an Option)
+// First in, first out: push at the back, pop from the front. It is also a double-ended queue: push_front and
+// pop_back work from the other end. The elements are copy types; `fill` is what the unused slots hold.
 
 pub copy struct Ring<T, const N: usize> { items: [T; N], head: usize, count: usize }
 
@@ -8,8 +10,14 @@ pub fn new<T, const N: usize>(fill: T) -> Ring<T, N> {
 }
 
 pub fn size<T, const N: usize>(r: Ring<T, N>) -> usize { return r.count; }
+pub fn capacity<T, const N: usize>(r: Ring<T, N>) -> usize { return N; }
 pub fn is_full<T, const N: usize>(r: Ring<T, N>) -> bool { return r.count == N; }
 pub fn is_empty<T, const N: usize>(r: Ring<T, N>) -> bool { return r.count == 0; }
+
+pub fn clear<T, const N: usize>(r: inout Ring<T, N>) {
+    r.head = 0;
+    r.count = 0;
+}
 
 // false when it is full
 pub fn push<T, const N: usize>(r: inout Ring<T, N>, x: T) -> bool {
@@ -23,6 +31,50 @@ pub fn pop<T, const N: usize>(r: inout Ring<T, N>) -> Option<T> {
     if r.count == 0 { return Option::None; }
     let x = r.items[r.head];
     r.head = (r.head + 1) % N;
+    r.count = r.count - 1;
+    return Option::Some(x);
+}
+
+// When it is full, the oldest element is dropped to make room (and returned); the newest data always gets in.
+pub fn push_overwrite<T, const N: usize>(r: inout Ring<T, N>, x: T) -> Option<T> {
+    var dropped: Option<T> = Option::None;
+    if r.count == N { dropped = pop(&r); }
+    push(&r, x);
+    return dropped;
+}
+
+// the front (the next to be popped), without taking it out
+pub fn peek<T, const N: usize>(r: Ring<T, N>) -> Option<T> {
+    if r.count == 0 { return Option::None; }
+    return Option::Some(r.items[r.head]);
+}
+
+// the back (the last one pushed)
+pub fn peek_back<T, const N: usize>(r: Ring<T, N>) -> Option<T> {
+    if r.count == 0 { return Option::None; }
+    return Option::Some(r.items[(r.head + r.count - 1) % N]);
+}
+
+// element i counted from the front (0 is the next to be popped)
+pub fn get<T, const N: usize>(r: Ring<T, N>, i: usize) -> Option<T> {
+    if i >= r.count { return Option::None; }
+    return Option::Some(r.items[(r.head + i) % N]);
+}
+
+// ---- the other end ----
+
+// false when it is full
+pub fn push_front<T, const N: usize>(r: inout Ring<T, N>, x: T) -> bool {
+    if r.count == N { return false; }
+    r.head = (r.head + N - 1) % N;
+    r.items[r.head] = x;
+    r.count = r.count + 1;
+    return true;
+}
+
+pub fn pop_back<T, const N: usize>(r: inout Ring<T, N>) -> Option<T> {
+    if r.count == 0 { return Option::None; }
+    let x = r.items[(r.head + r.count - 1) % N];
     r.count = r.count - 1;
     return Option::Some(x);
 }

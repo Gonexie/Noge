@@ -1,4 +1,7 @@
 // import "std/option.nge" as option;     option::unwrap_or(o, 0)
+//
+// Option<T> itself (Some / None) comes from the prelude. There are no functions that take a function (map, and_then,
+// filter): use `match`. What is here is what can be written without them. Nothing in this file traps.
 
 pub fn is_some<T>(o: Option<T>) -> bool {
     return match o {
@@ -14,6 +17,14 @@ pub fn is_none<T>(o: Option<T>) -> bool {
     };
 }
 
+// holds exactly this value (for types the == operator works on)
+pub fn contains<T>(o: Option<T>, x: T) -> bool {
+    return match o {
+        Option::Some(v) => v == x,
+        Option::None => false,
+    };
+}
+
 pub fn unwrap_or<T>(o: Option<T>, fallback: T) -> T {
     return match o {
         Option::Some(v) => v,
@@ -26,5 +37,53 @@ pub fn or<T>(a: Option<T>, b: Option<T>) -> Option<T> {
     return match a {
         Option::Some(v) => Option::Some(v),
         Option::None => b,
+    };
+}
+
+// b if a has a value, else none
+pub fn and<T, U>(a: Option<T>, b: Option<U>) -> Option<U> {
+    return match a {
+        Option::Some(_) => b,
+        Option::None => Option::None,
+    };
+}
+
+// the one that has a value, if exactly one does
+pub fn xor<T>(a: Option<T>, b: Option<T>) -> Option<T> {
+    return match a {
+        Option::Some(x) => match b {
+            Option::Some(_) => Option::None,
+            Option::None => Option::Some(x),
+        },
+        Option::None => b,
+    };
+}
+
+pub fn flatten<T>(o: Option<Option<T>>) -> Option<T> {
+    return match o {
+        Option::Some(inner) => inner,
+        Option::None => Option::None,
+    };
+}
+
+// takes the value out, leaving none behind
+pub fn take<T>(o: inout Option<T>) -> Option<T> {
+    let old = o;
+    o = Option::None;
+    return old;
+}
+
+// puts a value in, and returns what was there
+pub fn replace<T>(o: inout Option<T>, x: T) -> Option<T> {
+    let old = o;
+    o = Option::Some(x);
+    return old;
+}
+
+// the value as a Result: Ok(it), or Err(e) when there is none
+pub fn ok_or<T, E>(o: Option<T>, e: E) -> Result<T, E> {
+    return match o {
+        Option::Some(v) => Result::Ok(v),
+        Option::None => Result::Err(e),
     };
 }

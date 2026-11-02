@@ -1,0 +1,16 @@
+temperature = -12.34 C, id 0x0000beef
+TEMPERATURE = -12.34 C, ID 0X0000BEEF
+24
+5
+0
+0
+bad digit
+-42
+empty
+overflow
+-9223372036854775808
+1
+0
+1234
+Hi!
+done

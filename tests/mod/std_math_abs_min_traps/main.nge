@@ -1,0 +1,7 @@
+import "std/math.nge" as math;
+fn main() -> i32 {
+    print(math::abs(-127 as i8) as i32);
+    let m: i8 = -128;
+    print(math::abs(m) as i32);
+    return 0;
+}

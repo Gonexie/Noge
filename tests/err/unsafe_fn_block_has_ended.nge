@@ -1,0 +1,6 @@
+// error: calling the unsafe function 'f' requires an unsafe block
+unsafe fn f() -> i32 { return 1; }
+fn main() -> i32 {
+    unsafe { print(f()); }
+    return f();
+}

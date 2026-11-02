@@ -1,0 +1,180 @@
+// Bit tricks:   import "std/bits.nge" as bits;     bits::popcount(x)     bits::set(flags, 3)
+//
+// The numbered functions work on u32 (no suffix) and u64 (suffix 64); a u8 or u16 goes through `as u32`.
+// The generic ones (get, set, clear, toggle, put, is_pow2) work on any integer type, and the bit number has the
+// same type as the number, as shifts do in Noge: bits::set(x, 7) for a u8 takes a u8 bit number, and a bit number
+// that is not below the width of the type traps ("shift amount out of range"), it does not wrap.
+
+// ---- counting ----
+
+pub fn popcount(x: u32) -> u32 {
+    var v = x;
+    v = v - ((v >> 1) & 0x5555_5555);
+    v = (v & 0x3333_3333) + ((v >> 2) & 0x3333_3333);
+    v = (v + (v >> 4)) & 0x0F0F_0F0F;
+    return wrapping_mul(v, 0x0101_0101) >> 24;
+}
+
+pub fn popcount64(x: u64) -> u32 {
+    var v = x;
+    v = v - ((v >> 1) & 0x5555_5555_5555_5555);
+    v = (v & 0x3333_3333_3333_3333) + ((v >> 2) & 0x3333_3333_3333_3333);
+    v = (v + (v >> 4)) & 0x0F0F_0F0F_0F0F_0F0F;
+    return (wrapping_mul(v, 0x0101_0101_0101_0101) >> 56) as u32;
+}
+
+// leading zero bits; 32 for zero
+pub fn clz(x: u32) -> u32 {
+    if x == 0 { return 32; }
+    var n: u32 = 0;
+    var v = x;
+    if v <= 0x0000_FFFF { n = n + 16; v = v << 16; }
+    if v <= 0x00FF_FFFF { n = n + 8; v = v << 8; }
+    if v <= 0x0FFF_FFFF { n = n + 4; v = v << 4; }
+    if v <= 0x3FFF_FFFF { n = n + 2; v = v << 2; }
+    if v <= 0x7FFF_FFFF { n = n + 1; }
+    return n;
+}
+
+pub fn clz64(x: u64) -> u32 {
+    if x == 0 { return 64; }
+    var n: u32 = 0;
+    var v = x;
+    if v <= 0x0000_0000_FFFF_FFFF { n = n + 32; v = v << 32; }
+    if v <= 0x0000_FFFF_FFFF_FFFF { n = n + 16; v = v << 16; }
+    if v <= 0x00FF_FFFF_FFFF_FFFF { n = n + 8; v = v << 8; }
+    if v <= 0x0FFF_FFFF_FFFF_FFFF { n = n + 4; v = v << 4; }
+    if v <= 0x3FFF_FFFF_FFFF_FFFF { n = n + 2; v = v << 2; }
+    if v <= 0x7FFF_FFFF_FFFF_FFFF { n = n + 1; }
+    return n;
+}
+
+// trailing zero bits; 32 for zero
+pub fn ctz(x: u32) -> u32 {
+    if x == 0 { return 32; }
+    let lowest = x & wrapping_sub(0, x);
+    return popcount(lowest - 1);
+}
+
+pub fn ctz64(x: u64) -> u32 {
+    if x == 0 { return 64; }
+    let lowest = x & wrapping_sub(0, x);
+    return popcount64(lowest - 1);
+}
+
+// the position of the highest set bit (floor of the base 2 logarithm); traps for zero
+pub fn log2(x: u32) -> u32 { return 31 - clz(x); }
+
+// the smallest power of two that is >= x (1 for 0 and 1); traps if that is more than 2^31
+pub fn next_pow2(x: u32) -> u32 {
+    if x <= 1 { return 1; }
+    return 1 << (32 - clz(x - 1));
+}
+
+// ---- rotating and reversing ----
+
+// rotate left by n places (n is taken modulo 32)
+pub fn rotl(x: u32, n: u32) -> u32 {
+    let k = n & 31;
+    if k == 0 { return x; }
+    return (x << k) | (x >> (32 - k));
+}
+
+pub fn rotr(x: u32, n: u32) -> u32 {
+    let k = n & 31;
+    if k == 0 { return x; }
+    return (x >> k) | (x << (32 - k));
+}
+
+pub fn rotl64(x: u64, n: u32) -> u64 {
+    let k = (n & 63) as u64;
+    if k == 0 { return x; }
+    return (x << k) | (x >> (64 - k));
+}
+
+pub fn rotr64(x: u64, n: u32) -> u64 {
+    let k = (n & 63) as u64;
+    if k == 0 { return x; }
+    return (x >> k) | (x << (64 - k));
+}
+
+// the bytes in the opposite order (big endian <-> little endian)
+pub fn swap_bytes(x: u32) -> u32 {
+    return ((x & 0xFF) << 24) | ((x & 0xFF00) << 8) | ((x >> 8) & 0xFF00) | (x >> 24);
+}
+
+pub fn swap_bytes16(x: u16) -> u16 {
+    return (x << 8) | (x >> 8);
+}
+
+pub fn swap_bytes64(x: u64) -> u64 {
+    return ((swap_bytes(x as u32) as u64) << 32) | (swap_bytes((x >> 32) as u32) as u64);
+}
+
+// the bits in the opposite order: bit 0 becomes bit 31
+pub fn reverse_bits(x: u32) -> u32 {
+    var v = x;
+    v = ((v >> 1) & 0x5555_5555) | ((v & 0x5555_5555) << 1);
+    v = ((v >> 2) & 0x3333_3333) | ((v & 0x3333_3333) << 2);
+    v = ((v >> 4) & 0x0F0F_0F0F) | ((v & 0x0F0F_0F0F) << 4);
+    return swap_bytes(v);
+}
+
+pub fn reverse_bits8(x: u8) -> u8 {
+    return (reverse_bits(x as u32) >> 24) as u8;
+}
+
+pub fn reverse_bits64(x: u64) -> u64 {
+    return ((reverse_bits(x as u32) as u64) << 32) | (reverse_bits((x >> 32) as u32) as u64);
+}
+
+// ---- single bits, in any integer type (bit 0 is the lowest) ----
+
+pub fn get<T>(x: T, n: T) -> bool {
+    return (x >> n) & 1 == 1;
+}
+
+pub fn set<T>(x: T, n: T) -> T {
+    let one: T = 1;
+    return x | (one << n);
+}
+
+pub fn clear<T>(x: T, n: T) -> T {
+    let one: T = 1;
+    return x & ~(one << n);
+}
+
+pub fn toggle<T>(x: T, n: T) -> T {
+    let one: T = 1;
+    return x ^ (one << n);
+}
+
+// bit n set to `on`
+pub fn put<T>(x: T, n: T, on: bool) -> T {
+    if on { return set(x, n); }
+    return clear(x, n);
+}
+
+// a positive power of two (one bit set)
+pub fn is_pow2<T>(x: T) -> bool {
+    let z: T = 0;
+    return x > z && (x & (x - 1)) == z;
+}
+
+// ---- fields of a register: `width` bits starting at bit `lo` ----
+
+fn mask32(width: u32) -> u32 {
+    if width >= 32 { return 0xFFFF_FFFF; }
+    return (1 << width) - 1;
+}
+
+// the bits lo .. lo+width of x, moved down to bit 0 (lo must be below 32)
+pub fn field(x: u32, lo: u32, width: u32) -> u32 {
+    return (x >> lo) & mask32(width);
+}
+
+// x with the bits lo .. lo+width replaced by the low `width` bits of value; bits of the field above bit 31 are lost
+pub fn set_field(x: u32, lo: u32, width: u32, value: u32) -> u32 {
+    let m = mask32(width);
+    return (x & ~(m << lo)) | ((value & m) << lo);
+}

@@ -1,0 +1,9 @@
+import "lib.nge" as lib;
+
+fn main() -> i32 {
+    unsafe {
+        print(lib::peek(c"xyz", 2) as i32);     // 122
+        print(lib::peek_all(c"Q") as i32);      // 81
+    }
+    return 0;
+}

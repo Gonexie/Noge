@@ -39,6 +39,9 @@ NORETURN PRINTF_FMT(2, 3) void die(int line, const char *fmt, ...);
 PRINTF_FMT(1, 2) void note_push(const char *fmt, ...); /* a line printed after the next error, saying where we are */
 void note_pop(void);
 const char *note_name(const char *name); /* a long type name cut short, for a note */
+struct Inst;
+int push_inst_notes(struct Inst *i); /* notes saying where an instance (and the ones that asked for it) was asked for */
+void pop_notes(int n);
 char *read_file(const char *path);
 
 /* ---- tokens ---- */
@@ -165,6 +168,7 @@ struct Node {
     int nlocals;   /* FN: number of local ids used (params included) */
     int end_line;  /* BLOCK: line of the closing brace */
     int ext;       /* FN: EXT_NONE, EXT_EXTERN (declared in C) or EXT_EXPORT (named for C) */
+    int unsafe_fn; /* FN: declared `unsafe fn`: a call needs an unsafe block, and the body is one */
     int index;     /* VDECL: position of the variant in its enum */
     int flag;      /* VDECL / VARIANT / PAT: written with parentheses; MATCH: used as a statement */
     LocalInfo *linfo; /* FN: every local variable by id (parameters first) */
@@ -188,7 +192,9 @@ typedef struct Inst {
     Type **ctypes;    /* per parameter: the type of a const parameter (NULL for a type parameter) */
     unsigned id;      /* a hash of what it is an instance of: tells instances apart in the emitted C, and stays
                          the same when unrelated code changes, so that the C of other modules does not */
-    int line;         /* where it was first asked for */
+    int line;         /* where it was first asked for, and in which file */
+    const char *file;
+    struct Inst *parent; /* the instance whose body (or signature) was being worked on when it was asked for */
     const char *name; /* for messages: Pair<i32, bool> */
     struct Inst *next;
 } Inst;

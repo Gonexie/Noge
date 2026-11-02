@@ -109,6 +109,38 @@ Token *lex(const char *src) {
             tk.text.n = (int)(p - s);
             tk.str.p = buf;
             tk.str.n = n;
+        } else if (*p == '\'') { /* 'a': an integer literal holding the character's code (ASCII only) */
+            const char *s = p++;
+            uint64_t v;
+            if (*p == '\'') die(line, "empty character literal");
+            if (!*p || *p == '\n') die(line, "unterminated character literal");
+            if ((unsigned char)*p >= 0x80) die(line, "a character literal holds one ASCII character (write other bytes as \\xHH)");
+            if (*p != '\\') v = (unsigned char)*p++;
+            else {
+                p++;
+                switch (*p) {
+                case 'n': v = '\n'; break;
+                case 'r': v = '\r'; break;
+                case 't': v = '\t'; break;
+                case '0': v = 0; break;
+                case '\\': v = '\\'; break;
+                case '\'': v = '\''; break;
+                case '"': v = '"'; break;
+                case 'x':
+                    if (digit_val((unsigned char)p[1]) > 15 || digit_val((unsigned char)p[2]) > 15)
+                        die(line, "'\\x' needs two hexadecimal digits");
+                    v = (uint64_t)(digit_val((unsigned char)p[1]) * 16 + digit_val((unsigned char)p[2]));
+                    p += 2;
+                    break;
+                default: die(line, "unknown escape '\\%c' in character literal", *p ? *p : ' ');
+                }
+                p++;
+            }
+            if (*p != '\'') die(line, "a character literal holds exactly one character (it is not closed after it)");
+            p++;
+            tk.kind = T_INT;
+            tk.ival = v;
+            tk.text.n = (int)(p - s);
         } else if (isalpha((unsigned char)*p) || *p == '_') {
             const char *s = p;
             while (isalnum((unsigned char)*p) || *p == '_') p++;

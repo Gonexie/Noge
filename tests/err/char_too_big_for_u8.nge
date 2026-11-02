@@ -1,0 +1,2 @@
+// error: does not fit
+fn main() -> i32 { let c: i8 = '\xff'; return 0; }

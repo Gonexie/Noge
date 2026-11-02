@@ -1,0 +1,57 @@
+// Every standard library module except io, in a freestanding build: the object needs nothing from the C library
+// (no stdio, no exit, no malloc) and the C is warning-free.
+import "std/math.nge" as math;
+import "std/bits.nge" as bits;
+import "std/array.nge" as array;
+import "std/vec.nge" as vec;
+import "std/ring.nge" as ring;
+import "std/arena.nge" as arena;
+import "std/bitset.nge" as bitset;
+import "std/map.nge" as map;
+import "std/option.nge" as option;
+import "std/result.nge" as result;
+import "std/ascii.nge" as ascii;
+import "std/str.nge" as str;
+import "std/fmt.nge" as fmt;
+import "std/rand.nge" as rand;
+import "std/hash.nge" as hash;
+
+extern "C" fn board_report(code: i32);
+
+fn main() -> i32 {
+    var total: i32 = 0;
+    total = total + math::gcd(84, 36) + math::pow(2, 10) + math::isqrt(99);
+    total = total + bits::popcount(0xFF) as i32 + bits::get(5 as u8, 2 as u8) as i32;
+    var a: [i32; 4] = [4, 1, 3, 2];
+    array::sort(&a, 4);
+    total = total + a[0] + array::sum(a, 4);
+    var v: vec::Vec<i32, 4> = vec::new(0);
+    vec::push(&v, 7);
+    total = total + vec::sum(v);
+    var r: ring::Ring<i32, 2> = ring::new(0);
+    ring::push(&r, 5);
+    total = total + option::unwrap_or(ring::pop(&r), 0);
+    var ar: arena::Arena<i32, 2> = arena::new(0);
+    total = total + option::is_some(arena::alloc(&ar, 3)) as i32;
+    var b: bitset::Bitset<1> = bitset::new();
+    bitset::set(&b, 9);
+    total = total + bitset::count(b) as i32;
+    var m: map::Map<u8, i32, 2> = map::new(0, 0);
+    map::put(&m, 1, 40);
+    total = total + map::get_or(m, 1, 0);
+    total = total + result::unwrap_or(option::ok_or(Option::Some(1), false), 0);
+    total = total + ascii::to_upper('a') as i32;
+    var s: str::Str<32> = str::new();
+    unsafe { str::append_cstr(&s, c"abc"); }
+    fmt::append_int(&s, -12);
+    total = total + str::size(s) as i32;
+    match fmt::parse_int(s) {
+        Result::Ok(x) => { total = total + x as i32; }
+        Result::Err(_) => { total = total + 1; }
+    }
+    var g = rand::seed(1);
+    total = total + rand::below(&g, 10) as i32;
+    total = total + hash::crc32(s.bytes, s.len) as i32 + hash::crc8(s.bytes, s.len) as i32;
+    unsafe { board_report(total); }
+    return 0;
+}

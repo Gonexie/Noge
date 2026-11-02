@@ -1,0 +1,102 @@
+// A map from keys to values with room for N pairs and no allocation:   import "std/map.nge" as map;
+//   var m: map::Map<u8, i32, 16> = map::new(0, 0);       // what the unused slots hold
+//   map::put(&m, 7, 100);   map::get(m, 7)  (an Option)   map::remove(&m, 7)   map::has(m, 7)
+//
+// Keys are compared with ==, so they are integers, bools or enums without data; values can be any copy type. The
+// pairs are kept in a row and found by looking at them one after the other: fine for the tens of entries a
+// microcontroller program has, not for thousands. key_at / value_at walk the pairs in storage order, which is the
+// order they were put in, except that remove moves the last pair into the place that was freed.
+// A failure to do something (no room) is a false, never a trap.
+
+pub copy struct Map<K, V, const N: usize> { keys: [K; N], values: [V; N], len: usize }
+
+pub fn new<K, V, const N: usize>(fill_key: K, fill_value: V) -> Map<K, V, N> {
+    return Map { keys: [fill_key; N], values: [fill_value; N], len: 0 };
+}
+
+pub fn size<K, V, const N: usize>(m: Map<K, V, N>) -> usize { return m.len; }
+pub fn capacity<K, V, const N: usize>(m: Map<K, V, N>) -> usize { return N; }
+pub fn is_full<K, V, const N: usize>(m: Map<K, V, N>) -> bool { return m.len == N; }
+pub fn is_empty<K, V, const N: usize>(m: Map<K, V, N>) -> bool { return m.len == 0; }
+
+pub fn clear<K, V, const N: usize>(m: inout Map<K, V, N>) { m.len = 0; }
+
+// the storage position of a key
+pub fn index_of<K, V, const N: usize>(m: Map<K, V, N>, key: K) -> Option<usize> {
+    var i: usize = 0;
+    while i < m.len {
+        if m.keys[i] == key { return Option::Some(i); }
+        i = i + 1;
+    }
+    return Option::None;
+}
+
+pub fn has<K, V, const N: usize>(m: Map<K, V, N>, key: K) -> bool {
+    return match index_of(m, key) {
+        Option::Some(_) => true,
+        Option::None => false,
+    };
+}
+
+pub fn get<K, V, const N: usize>(m: Map<K, V, N>, key: K) -> Option<V> {
+    return match index_of(m, key) {
+        Option::Some(i) => Option::Some(m.values[i]),
+        Option::None => Option::None,
+    };
+}
+
+pub fn get_or<K, V, const N: usize>(m: Map<K, V, N>, key: K, fallback: V) -> V {
+    return match index_of(m, key) {
+        Option::Some(i) => m.values[i],
+        Option::None => fallback,
+    };
+}
+
+// Sets the value of a key, adding the pair if the key is new. False, and nothing changes, when the key is new
+// and there is no room.
+pub fn put<K, V, const N: usize>(m: inout Map<K, V, N>, key: K, value: V) -> bool {
+    return match index_of(m, key) {
+        Option::Some(i) => put_at(&m, i, value),
+        Option::None => append(&m, key, value),
+    };
+}
+
+fn put_at<K, V, const N: usize>(m: inout Map<K, V, N>, i: usize, value: V) -> bool {
+    m.values[i] = value;
+    return true;
+}
+
+fn append<K, V, const N: usize>(m: inout Map<K, V, N>, key: K, value: V) -> bool {
+    if m.len == N { return false; }
+    m.keys[m.len] = key;
+    m.values[m.len] = value;
+    m.len = m.len + 1;
+    return true;
+}
+
+// takes a pair out and gives back its value; the last pair moves into the gap
+pub fn remove<K, V, const N: usize>(m: inout Map<K, V, N>, key: K) -> Option<V> {
+    return match index_of(m, key) {
+        Option::Some(i) => Option::Some(take_at(&m, i)),
+        Option::None => Option::None,
+    };
+}
+
+fn take_at<K, V, const N: usize>(m: inout Map<K, V, N>, i: usize) -> V {
+    let v = m.values[i];
+    m.len = m.len - 1;
+    m.keys[i] = m.keys[m.len];
+    m.values[i] = m.values[m.len];
+    return v;
+}
+
+// the pairs in storage order, 0 to size-1
+pub fn key_at<K, V, const N: usize>(m: Map<K, V, N>, i: usize) -> Option<K> {
+    if i >= m.len { return Option::None; }
+    return Option::Some(m.keys[i]);
+}
+
+pub fn value_at<K, V, const N: usize>(m: Map<K, V, N>, i: usize) -> Option<V> {
+    if i >= m.len { return Option::None; }
+    return Option::Some(m.values[i]);
+}

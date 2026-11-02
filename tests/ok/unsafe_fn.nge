@@ -1,0 +1,31 @@
+// An `unsafe fn` is called from an unsafe block, and its own body is one: no block is needed inside it.
+
+unsafe fn first_byte(p: *const u8) -> u8 {
+    return ptr_read(p);
+}
+
+unsafe fn second_byte(p: *const u8) -> u8 {
+    return first_byte(ptr_offset(p, 1));        // an unsafe fn may call another without a block
+}
+
+// a generic unsafe fn: each instance is unsafe as well
+unsafe fn read_at<T>(p: *const T, i: usize) -> T {
+    return ptr_read(ptr_offset(p, i as isize));
+}
+
+fn safe_wrapper(p: *const u8) -> i32 {
+    unsafe {
+        return first_byte(p) as i32 + second_byte(p) as i32;
+    }
+}
+
+fn main() -> i32 {
+    let s = c"AB";
+    unsafe {
+        print(first_byte(s) as i32);            // 65
+        print(second_byte(s) as i32);           // 66
+        print(read_at(s, 1) as i32);            // 66
+    }
+    print(safe_wrapper(s));                     // 131
+    return 0;
+}

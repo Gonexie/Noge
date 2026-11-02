@@ -17,6 +17,10 @@ from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import modules_check
 
+# `make -s check-separate` would pass -s on to the make this script runs, which then prints no compile commands to count
+for _var in ("MAKEFLAGS", "MFLAGS", "MAKELEVEL"):
+    os.environ.pop(_var, None)
+
 NOGEC = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else "build/nogec")
 CC = os.environ.get("CC", "cc")
 STD = os.path.abspath("std")
@@ -48,7 +52,7 @@ def check_program(name, main, want_out, want_trap=None):
                 return "%s %s: %s" % (name, flags, err)
             e = subprocess.run([exe], capture_output=True, text=True)
             if want_trap is not None:
-                if e.returncode != 101 or want_trap not in e.stderr:
+                if e.returncode != 101 or not all(line in e.stderr for line in want_trap.split("\n") if line):
                     return "%s %s: wanted a failed check (101) saying '%s', got %d and %r" % (name, flags, want_trap, e.returncode, e.stderr)
             elif e.returncode != 0:
                 return "%s %s: the program failed with %d: %s" % (name, flags, e.returncode, e.stderr)
