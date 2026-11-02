@@ -1,0 +1,11 @@
+// error: struct 'Bad' contains itself
+copy struct Pair<A, B> { a: A, b: B }
+copy enum Option<T> { Some(T), None }
+copy struct Id<T> { index: u32 }
+struct Buf { len: i32 }
+copy struct Cell { x: i32 }
+copy enum Color { Red, Green }
+fn plain(x: i32) -> i32 { return x; }
+struct Bad<T> { x: Bad<T>, y: T }
+fn f(b: Bad<i32>) -> i32 { return 0; }
+fn main() -> i32 { return 0; }

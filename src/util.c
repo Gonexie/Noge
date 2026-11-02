@@ -54,6 +54,13 @@ void note_push(const char *fmt, ...) {
     nnotes++; /* beyond the limit the note is dropped, but the count stays right for note_pop */
 }
 
+const char *note_name(const char *name) {
+    if (strlen(name) <= 90) return name;
+    char *s = arena_strn(&g_arena, name, 90);
+    memcpy(s + 87, "...", 4);
+    return s;
+}
+
 void note_pop(void) {
     if (nnotes > 0) nnotes--;
 }

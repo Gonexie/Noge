@@ -1,0 +1,47 @@
+// Const parameters: the length of an array is part of the type, and can be used as a value.
+struct Ring<T, const N: usize> { items: [T; N], head: usize, count: usize }
+
+fn ring_new<T, const N: usize>(fill: T) -> Ring<T, N> {
+    return Ring { items: [fill; N], head: 0, count: 0 };
+}
+
+fn ring_push<T, const N: usize>(r: inout Ring<T, N>, v: T) -> bool {
+    if r.count == N { return false; }
+    let at = (r.head + r.count) % N;
+    r.items[at] = v;
+    r.count = r.count + 1;
+    return true;
+}
+
+fn ring_pop<T, const N: usize>(r: inout Ring<T, N>, fallback: T) -> T {
+    if r.count == 0 { return fallback; }
+    let v = r.items[r.head];
+    r.head = (r.head + 1) % N;
+    r.count = r.count - 1;
+    return v;
+}
+
+fn size<const N: usize>() -> usize { return N; }
+fn neg<const D: i32>() -> i32 { return D * 2; }
+fn double_len<T, const N: usize>(a: [T; N]) -> usize { return N * 2; }
+
+fn main() -> i32 {
+    var r: Ring<i32, 3> = ring_new(0);
+    print(ring_push(&r, 10) as i32);      // 1
+    print(ring_push(&r, 20) as i32);      // 1
+    print(ring_push(&r, 30) as i32);      // 1
+    print(ring_push(&r, 40) as i32);      // full: 0
+    print(ring_pop(&r, -1));              // 10
+    print(ring_push(&r, 50) as i32);      // wraps around: 1
+    print(ring_pop(&r, -1));              // 20
+    print(ring_pop(&r, -1));              // 30
+    print(ring_pop(&r, -1));              // 50
+    print(ring_pop(&r, -1));              // empty: -1
+    print(size::<8>() as i32);            // 8
+    print(neg::<-3>());                   // -6
+    print(double_len([1, 2, 3]) as i32);  // 6
+    var small = ring_new::<u8, 2>(0);     // another size, another type
+    ring_push(&small, 7);
+    print(ring_pop(&small, 9) as i32);    // 7
+    return 0;
+}

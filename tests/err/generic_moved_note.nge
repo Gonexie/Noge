@@ -1,0 +1,11 @@
+// error: in 'dup<Buf>', which was asked for on line
+copy struct Pair<A, B> { a: A, b: B }
+copy enum Option<T> { Some(T), None }
+copy struct Id<T> { index: u32 }
+struct Buf { len: i32 }
+copy struct Cell { x: i32 }
+copy enum Color { Red, Green }
+fn plain(x: i32) -> i32 { return x; }
+fn dup<T>(x: T) -> Pair<T, T> { return Pair { a: x, b: x }; }
+fn f() -> i32 { let p = dup(Buf { len: 1 }); return 0; }
+fn main() -> i32 { return 0; }

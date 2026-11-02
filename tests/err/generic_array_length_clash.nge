@@ -1,0 +1,11 @@
+// error: type mismatch: expected '[i32; 3]', found '[i32; 2]'
+copy struct Pair<A, B> { a: A, b: B }
+copy enum Option<T> { Some(T), None }
+copy struct Id<T> { index: u32 }
+struct Buf { len: i32 }
+copy struct Cell { x: i32 }
+copy enum Color { Red, Green }
+fn plain(x: i32) -> i32 { return x; }
+fn dot<const N: usize>(a: [i32; N], b: [i32; N]) -> i32 { return 0; }
+fn f() -> i32 { return dot([1, 2, 3], [1, 2]); }
+fn main() -> i32 { return 0; }

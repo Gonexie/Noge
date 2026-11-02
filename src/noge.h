@@ -38,6 +38,7 @@ extern const char *g_file;
 NORETURN PRINTF_FMT(2, 3) void die(int line, const char *fmt, ...);
 PRINTF_FMT(1, 2) void note_push(const char *fmt, ...); /* a line printed after the next error, saying where we are */
 void note_pop(void);
+const char *note_name(const char *name); /* a long type name cut short, for a note */
 char *read_file(const char *path);
 
 /* ---- tokens ---- */

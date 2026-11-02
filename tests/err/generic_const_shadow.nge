@@ -1,0 +1,11 @@
+// error: is a const parameter of this declaration, so it cannot also name a variable
+copy struct Pair<A, B> { a: A, b: B }
+copy enum Option<T> { Some(T), None }
+copy struct Id<T> { index: u32 }
+struct Buf { len: i32 }
+copy struct Cell { x: i32 }
+copy enum Color { Red, Green }
+fn plain(x: i32) -> i32 { return x; }
+fn f<const N: usize>() -> usize { let N = 3; return N; }
+fn g() -> usize { return f::<4>(); }
+fn main() -> i32 { return 0; }

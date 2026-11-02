@@ -1,0 +1,10 @@
+// error: 'i32' is a builtin type, so it cannot be a generic parameter
+copy struct Pair<A, B> { a: A, b: B }
+copy enum Option<T> { Some(T), None }
+copy struct Id<T> { index: u32 }
+struct Buf { len: i32 }
+copy struct Cell { x: i32 }
+copy enum Color { Red, Green }
+fn plain(x: i32) -> i32 { return x; }
+fn f<i32>(x: i32) -> i32 { return 0; }
+fn main() -> i32 { return 0; }

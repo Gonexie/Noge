@@ -1,0 +1,11 @@
+// error: is too big to name
+copy struct Pair<A, B> { a: A, b: B }
+copy enum Option<T> { Some(T), None }
+copy struct Id<T> { index: u32 }
+struct Buf { len: i32 }
+copy struct Cell { x: i32 }
+copy enum Color { Red, Green }
+fn plain(x: i32) -> i32 { return x; }
+fn grow<T>(n: i32) { grow::<Pair<T, T>>(n); }
+fn f() -> i32 { grow::<i32>(1); return 0; }
+fn main() -> i32 { return 0; }

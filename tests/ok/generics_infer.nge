@@ -1,0 +1,51 @@
+// How the compiler works out what a generic parameter is: from the arguments (a plain number takes the type of
+// another argument), from the expected type, from an array's length, or from what is written out.
+copy struct Pair<A, B> { a: A, b: B }
+copy enum Option<T> { Some(T), None }
+const CAP: usize = 3;
+struct Buf<T, const N: usize> { items: [T; N] }
+
+fn pick<T>(a: T, b: T) -> T { return b; }
+fn none_of<T>() -> Option<T> { return Option::None; }
+fn count<T, const N: usize>(a: [T; N]) -> usize { return N; }
+fn wrap<T>(x: T) -> Option<T> { return Option::Some(x); }
+
+fn dot<const N: usize>(a: [i32; N], b: [i32; N]) -> i32 {
+    var i: usize = 0;
+    var s = 0;
+    while i < N {
+        s = s + a[i] * b[i];
+        i = i + 1;
+    }
+    return s;
+}
+
+fn get<T>(o: Option<T>, d: T) -> T {
+    return match o {
+        Option::Some(v) => v,
+        Option::None => d,
+    };
+}
+
+fn main() -> i32 {
+    let small: u8 = 200;
+    print(pick(1, small) as i32);             // the 1 is a u8, so this is small: 200
+    print(pick(small, 7) as i32);             // 7
+    let n: Option<u8> = none_of();            // T comes from the type the result is wanted as
+    print(get(n, 9) as i32);                  // 9
+    let m = none_of::<i64>();                 // or from what is written out
+    print(get(m, 5) as i32);                  // 5
+    print(count([1, 2, 3, 4]) as i32);        // N comes from the array: 4
+    print(count([true, false]) as i32);       // 2
+    print(dot([1, 2, 3], [4, 5, 6]));         // 4 + 10 + 18 = 32
+    let b = Buf::<i32, CAP> { items: [1, 2, 3] };    // a named constant as an argument
+    print(len(b.items));                      // 3
+    match wrap(wrap(5)) {                     // Option<Option<i32>>
+        Option::Some(Option::Some(v)) => { print(v); }    // 5
+        Option::Some(Option::None) => { print(0); }
+        Option::None => { print(-1); }
+    }
+    let q = Pair { a: wrap(1), b: wrap(true) };      // Pair<Option<i32>, Option<bool>>
+    print(get(q.a, 0));                       // 1
+    return 0;
+}

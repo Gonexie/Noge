@@ -1,0 +1,50 @@
+struct Buf { len: i32 }
+enum Slot<T> { Full(T), Empty }
+copy struct Pair<A, B> { a: A, b: B }
+struct Holder<T> { item: T, count: i32 }
+
+fn take<T>(s: sink Slot<T>, d: sink T) -> T {
+    return match s {
+        Slot::Full(v) => v,
+        Slot::Empty => d,
+    };
+}
+
+fn bump<T>(h: inout Holder<T>) {
+    h.count = h.count + 1;
+}
+
+fn fact<T>(n: i32, x: T) -> i32 {
+    if n <= 1 { return 1; }
+    return n * fact(n - 1, x);
+}
+
+fn make<T>(v: sink T) -> Slot<T> { return Slot::Full(v); }
+
+fn main() -> i32 {
+    let a = take(make(Buf { len: 5 }), Buf { len: 6 });     // moves a non-copy value through generics
+    print(a.len);
+    let b: Slot<Buf> = Slot::Empty;
+    print(take(b, Buf { len: 8 }).len);
+    var h = Holder { item: 3, count: 0 };
+    bump(&h);
+    bump(&h);
+    print(h.count);
+    var hb = Holder { item: Buf { len: 1 }, count: 10 };
+    bump(&hb);
+    print(hb.count);
+    print(fact(5, true));
+    print(fact(4, Pair { a: 1, b: 2 }));
+    let arr = [Slot::Full(1), Slot::Empty, Slot::Full(3)];
+    var sum = 0;
+    var i = 0;
+    while i < len(arr) {
+        match arr[i] {
+            Slot::Full(v) => { sum = sum + v; }
+            Slot::Empty => { }
+        }
+        i = i + 1;
+    }
+    print(sum);
+    return 0;
+}

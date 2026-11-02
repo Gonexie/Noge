@@ -1,0 +1,47 @@
+// arena with a const parameter, phantom handle, nested generics
+struct Buf<T, const N: usize> { items: [T; N], len: usize }
+copy struct Id<T> { index: u32 }
+copy enum Option<T> { Some(T), None }
+
+copy struct Node { value: i32, next: i32 }
+copy struct Cell { x: i32 }
+
+fn buf_new<T, const N: usize>(fill: T) -> Buf<T, N> {
+    return Buf { items: [fill; N], len: 0 };
+}
+
+fn push<T, const N: usize>(b: inout Buf<T, N>, v: T) -> Option<Id<T>> {
+    if b.len >= len(b.items) { return Option::None; }
+    let i = b.len;
+    b.items[i] = v;
+    b.len = b.len + 1;
+    return Option::Some(Id { index: i as u32 });
+}
+
+fn get<T, const N: usize>(b: Buf<T, N>, id: Id<T>) -> T {
+    return b.items[id.index];
+}
+
+fn main() -> i32 {
+    var nodes: Buf<Node, 4> = buf_new(Node { value: 0, next: -1 });
+    var cells = buf_new::<Cell, 2>(Cell { x: 0 });
+    let a = push(&nodes, Node { value: 11, next: 1 });
+    let c = push(&cells, Cell { x: 99 });
+    match a {
+        Option::Some(id) => { print(get(nodes, id).value); }
+        Option::None => { print(-1); }
+    }
+    match c {
+        Option::Some(id) => { print(get(cells, id).x); }
+        Option::None => { print(-1); }
+    }
+    let nested: Option<Option<i32>> = Option::Some(Option::Some(4));
+    match nested {
+        Option::Some(Option::Some(v)) => { print(v); }
+        Option::Some(Option::None) => { print(-2); }
+        Option::None => { print(-3); }
+    }
+    print(len(nodes.items));
+    print(len(cells.items));
+    return 0;
+}

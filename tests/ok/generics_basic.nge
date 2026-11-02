@@ -1,0 +1,31 @@
+copy struct Pair<A, B> { a: A, b: B }
+copy enum Option<T> { Some(T), None }
+
+fn swap<A, B>(p: Pair<A, B>) -> Pair<B, A> {
+    return Pair { a: p.b, b: p.a };
+}
+
+fn unwrap_or<T>(o: Option<T>, d: T) -> T {
+    return match o {
+        Option::Some(v) => v,
+        Option::None => d,
+    };
+}
+
+fn first<T, const N: usize>(a: [T; N]) -> T {
+    return a[0];
+}
+
+fn main() -> i32 {
+    let p = Pair { a: 7, b: true };
+    let q = swap(p);
+    if q.a { print(q.b); }
+    let o: Option<i32> = Option::Some(5);
+    let n: Option<i32> = Option::None;
+    print(unwrap_or(o, 9));
+    print(unwrap_or(n, 9));
+    let arr = [10, 20, 30];
+    print(first(arr));
+    print(len(arr));
+    return 0;
+}

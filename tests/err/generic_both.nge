@@ -1,0 +1,11 @@
+// error: 'A' is both 'i32' and 'bool'
+copy struct Pair<A, B> { a: A, b: B }
+copy enum Option<T> { Some(T), None }
+copy struct Id<T> { index: u32 }
+struct Buf { len: i32 }
+copy struct Cell { x: i32 }
+copy enum Color { Red, Green }
+fn plain(x: i32) -> i32 { return x; }
+fn f<A>(x: Pair<A, A>) -> i32 { return 0; }
+fn g() -> i32 { return f(Pair { a: 1, b: true }); }
+fn main() -> i32 { return 0; }

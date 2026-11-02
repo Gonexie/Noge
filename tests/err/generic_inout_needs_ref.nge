@@ -1,0 +1,11 @@
+// error: argument for inout parameter 'h' must be written '&place'
+copy struct Pair<A, B> { a: A, b: B }
+copy enum Option<T> { Some(T), None }
+copy struct Id<T> { index: u32 }
+struct Buf { len: i32 }
+copy struct Cell { x: i32 }
+copy enum Color { Red, Green }
+fn plain(x: i32) -> i32 { return x; }
+fn bump<T>(h: inout T, d: T) { }
+fn f() -> i32 { var x = 1; bump(x, 2); return 0; }
+fn main() -> i32 { return 0; }

@@ -1,0 +1,11 @@
+// error: use of moved value 'a'
+copy struct Pair<A, B> { a: A, b: B }
+copy enum Option<T> { Some(T), None }
+copy struct Id<T> { index: u32 }
+struct Buf { len: i32 }
+copy struct Cell { x: i32 }
+copy enum Color { Red, Green }
+fn plain(x: i32) -> i32 { return x; }
+enum Slot<T> { Full(T), Empty }
+fn f() -> i32 { let a = Slot::Full(Buf { len: 1 }); let b = a; let c = a; return 0; }
+fn main() -> i32 { return 0; }

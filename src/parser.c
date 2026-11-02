@@ -90,6 +90,13 @@ static Node *parse_targs(void) {
             a = mk(N_INT, cur()->line);
             a->ival = cur()->ival;
             advance();
+        } else if (cur()->kind == T_MINUS && peek(1)->kind == T_INT) { /* a negative number */
+            a = mk(N_UN, cur()->line);
+            a->op = T_MINUS;
+            advance();
+            a->a = mk(N_INT, cur()->line);
+            a->a->ival = cur()->ival;
+            advance();
         } else {
             a = parse_type(); /* a name here may turn out to be a constant: decided when the parameter is known */
         }

@@ -233,7 +233,7 @@ static Type *resolve_type(Node *ty);
  * arguments makes an instance, a copy of the declaration with the parameters replaced, which is registered and
  * checked exactly like hand-written code. So every safety check runs on every instance, and a generic function
  * that nothing uses is not checked at all. Instances are appended to the program, after the declarations. */
-#define MAX_INSTS 2048
+#define MAX_INSTS 20000
 #define MAX_INST_DEPTH 48
 static Node *prog_tail;   /* the last declaration: instances are appended here */
 static int n_insts, inst_depth;
@@ -368,7 +368,7 @@ static void sb_add(Sb *b, const char *s) {
     b->n += l;
 }
 
-static const char *inst_display(Node *tpl, Type **types, uint64_t *vals, Type **ctypes) {
+static const char *inst_display(Node *tpl, Type **types, uint64_t *vals, Type **ctypes, int line) {
     Sb b = {0};
     char num[40];
     sb_add(&b, arena_strn(&g_arena, tpl->name.p, tpl->name.n));
@@ -387,6 +387,9 @@ static const char *inst_display(Node *tpl, Type **types, uint64_t *vals, Type **
         }
     }
     sb_add(&b, ">");
+    if (b.n > 2000)
+        die(line, "the type '%.40s...' is too big to name (more than 2000 characters): does a generic function "
+                  "call itself with a bigger type each time?", b.p);
     const char *r = arena_strn(&g_arena, b.p, (int)b.n);
     free(b.p);
     return r;
@@ -419,7 +422,7 @@ static Inst *new_inst(Node *tpl, Type **types, uint64_t *vals, Type **ctypes, in
     memcpy(r->ctypes, ctypes, sizeof(Type *) * (size_t)n);
     r->id = ++n_insts;
     r->line = line;
-    r->name = inst_display(tpl, types, vals, ctypes);
+    r->name = inst_display(tpl, types, vals, ctypes, line);
     r->next = tpl->inst;
     tpl->inst = r;
     return r;
@@ -458,7 +461,7 @@ static Type *instantiate_type(Node *tpl, Type **types, uint64_t *vals, Type **ct
     prog_tail->next = d;
     prog_tail = d;
 
-    note_push("in '%s', which was asked for on line %d", r->name, line);
+    note_push("in '%s', which was asked for on line %d", note_name(r->name), line);
     inst_depth++;
     if (is_enum) {
         resolve_enum(d);
@@ -494,7 +497,7 @@ static Node *instantiate_fn(Node *tpl, Type **types, uint64_t *vals, Type **ctyp
     Node *d = clone_decl(tpl, &s);
     d->inst = r;
     r->decl = d;
-    note_push("in '%s', which was asked for on line %d", r->name, line);
+    note_push("in '%s', which was asked for on line %d", note_name(r->name), line);
     inst_depth++;
     for (Node *p = d->a; p; p = p->next) {
         for (Node *q = d->a; q != p; q = q->next)
@@ -623,6 +626,8 @@ static uint64_t const_arg_value(Node *arg, Type *pt) {
     e->next = NULL;
     if (arg->kind == N_TYPE) {
         if (arg->op != 0 || arg->gen || arg->type) die(arg->line, "expected a constant number here, found a type");
+        if (!map_get(&const_map, arg->name))
+            die(arg->line, "expected a constant number here, but '%.*s' is not a constant", SF(arg->name));
         e->kind = N_NAME;
     }
     int saved = unsafe_depth;
@@ -709,8 +714,8 @@ static Type *instantiate_written(Node *tpl, Node *ty) {
 }
 
 static Type *resolve_type(Node *ty) {
-    if (ty->type) return ty->type; /* a generic parameter that has been replaced by its argument */
     if (ty->kind != N_TYPE) die(ty->line, "expected a type, found a number");
+    if (ty->type) return ty->type; /* a generic parameter that has been replaced by its argument */
     if (ty->op == 2) /* *mut T, *const T */
         return ptr_type(resolve_type(ty->a), ty->ival != 0);
     if (ty->op == 1) { /* [T; N] */
@@ -1835,7 +1840,7 @@ static void check_fn(Node *fn) {
     depth = 1;
     next_id = 0;
     unsafe_depth = 0;
-    if (fn->inst) note_push("in '%s', which was asked for on line %d", fn->inst->name, fn->inst->line);
+    if (fn->inst) note_push("in '%s', which was asked for on line %d", note_name(fn->inst->name), fn->inst->line);
     for (Node *p = fn->a; p; p = p->next)
         p->local = declare(p->line, p->name, p->type, p->op == M_INOUT || p->op == M_SET, p->op == M_INOUT || p->op == M_SET,
                            p->op == M_INOUT ? LK_INOUT : p->op == M_SET ? LK_SET : p->op == M_SINK ? LK_SINK : LK_LETPARAM);
@@ -1881,6 +1886,10 @@ Node *check_program(Node *program) {
             for (Node *p = d->gen; p; p = p->next)
                 for (Node *q = d->gen; q != p; q = q->next)
                     if (str_eq(p->name, q->name)) die(p->line, "generic parameter '%.*s' declared twice", SF(p->name));
+            for (Node *p = d->gen; p; p = p->next)
+                for (int i = 0; i < NPRIMS; i++)
+                    if (str_is(p->name, prims[i].name))
+                        die(p->line, "'%.*s' is a builtin type, so it cannot be a generic parameter", SF(p->name));
             if (d->kind == N_FN && d->ext != EXT_NONE)
                 die(d->line, "a function that is shared with C cannot be generic: C has no generics");
             if (d->kind == N_FN && str_is(d->name, "main")) die(d->line, "'main' cannot be generic");
