@@ -1,0 +1,8 @@
+// error: cannot match on a value of type 'P'
+struct P { x: i32 }
+fn f(p: P) -> i32 {
+    return match p {
+        _ => 1,
+    };
+}
+fn main() -> i32 { return 0; }

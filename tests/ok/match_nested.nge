@@ -1,0 +1,72 @@
+// Patterns inside patterns: literals and names in a variant's values, alternatives inside and outside
+// them, and enums that carry other enums.
+enum Cmd {
+    Move(i32, i32),
+    Say(i32),
+    Stop,
+}
+
+enum Msg {
+    Cmd(Cmd),
+    Ping,
+    Pair(Cmd, Cmd),
+}
+
+fn weight(c: Cmd) -> i32 {
+    return match c {
+        Cmd::Move(0, 0) => 1,
+        Cmd::Move(0, y) => 10 + y,
+        Cmd::Move(x, 0) => 20 + x,
+        Cmd::Move(_, _) => 30,
+        Cmd::Say(1 | 2) => 40,
+        Cmd::Say(n) => 50 + n,
+        Cmd::Stop => 60,
+    };
+}
+
+fn describe(m: Msg) -> i32 {
+    return match m {
+        Msg::Ping => 0,
+        Msg::Cmd(Cmd::Stop) => 1,
+        Msg::Cmd(Cmd::Say(n)) => 100 + n,
+        Msg::Cmd(Cmd::Move(a, b)) => 1000 + a * 10 + b,
+        Msg::Pair(Cmd::Stop, _) | Msg::Pair(_, Cmd::Stop) => 2,
+        Msg::Pair(Cmd::Say(a), Cmd::Say(b)) => a + b,
+        Msg::Pair(_, _) => 3,
+    };
+}
+
+fn is_quiet(c: Cmd) -> bool {
+    return match c {
+        Cmd::Stop | Cmd::Say(0) => true,
+        _ => false,
+    };
+}
+
+fn main() -> i32 {
+    print(weight(Cmd::Move(0, 0)));    // 1
+    print(weight(Cmd::Move(0, 5)));    // 15
+    print(weight(Cmd::Move(3, 0)));    // 23
+    print(weight(Cmd::Move(2, 2)));    // 30
+    print(weight(Cmd::Say(1)));        // 40
+    print(weight(Cmd::Say(2)));        // 40
+    print(weight(Cmd::Say(7)));        // 57
+    print(weight(Cmd::Stop));          // 60
+
+    print(describe(Msg::Ping));                                    // 0
+    print(describe(Msg::Cmd(Cmd::Stop)));                          // 1
+    print(describe(Msg::Cmd(Cmd::Say(5))));                        // 105
+    print(describe(Msg::Cmd(Cmd::Move(2, 3))));                    // 1023
+    print(describe(Msg::Pair(Cmd::Stop, Cmd::Say(1))));            // 2
+    print(describe(Msg::Pair(Cmd::Say(1), Cmd::Stop)));            // 2
+    print(describe(Msg::Pair(Cmd::Stop, Cmd::Stop)));              // 2
+    print(describe(Msg::Pair(Cmd::Say(2), Cmd::Say(3))));          // 5
+    print(describe(Msg::Pair(Cmd::Move(1, 1), Cmd::Say(1))));      // 3
+    print(describe(Msg::Pair(Cmd::Say(1), Cmd::Move(1, 1))));      // 3
+
+    if is_quiet(Cmd::Stop) { print(1); } else { print(0); }        // 1
+    if is_quiet(Cmd::Say(0)) { print(1); } else { print(0); }      // 1
+    if is_quiet(Cmd::Say(1)) { print(1); } else { print(0); }      // 0
+    if is_quiet(Cmd::Move(0, 0)) { print(1); } else { print(0); } // 0
+    return 0;
+}

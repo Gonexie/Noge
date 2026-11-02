@@ -1,0 +1,11 @@
+// error: 'Msg::Pair' is not fully covered
+enum Cmd { Go, Stop }
+enum Msg { Cmd(Cmd), Pair(Cmd, Cmd) }
+fn f(m: Msg) -> i32 {
+    return match m {
+        Msg::Cmd(_) => 0,
+        Msg::Pair(Cmd::Go, _) => 1,
+        Msg::Pair(_, Cmd::Go) => 2,
+    };
+}
+fn main() -> i32 { return 0; }

@@ -1,0 +1,5 @@
+// error: 'Buf' in variant 'B' is not copy, so 'F' cannot be a copy enum
+struct Buf { len: i32 }
+enum E { A(Buf) }
+copy enum F { B(Buf) }
+fn main() -> i32 { return 0; }

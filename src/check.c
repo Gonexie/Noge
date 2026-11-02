@@ -24,6 +24,7 @@ static Type prims[] = {
 #define NPRIMS ((int)(sizeof prims / sizeof *prims))
 Type *ty_unit = &prims[0], *ty_bool = &prims[1], *ty_i32 = &prims[4], *ty_usize = &prims[10], *ty_isize = &prims[11];
 static Type *const ty_u8 = &prims[6];
+static Type *const ty_i64 = &prims[5];
 
 Type *g_array_types; /* every array type, in creation order */
 Type *g_ptr_types;   /* every raw-pointer type, in creation order */
@@ -89,7 +90,11 @@ static Local *find_local(Str name) {
     return NULL;
 }
 
-static int declare(int line, Str name, Type *t, int is_mut, int by_ptr) {
+/* every local of the function being checked, by id: the flow pass reads this instead of searching the tree */
+static LocalInfo *fn_locals;
+static int fn_locals_cap;
+
+static int declare(int line, Str name, Type *t, int is_mut, int by_ptr, int kind) {
     for (int i = nlocals - 1; i >= 0 && locals[i].depth == depth; i--)
         if (str_eq(locals[i].name, name))
             die(line, "'%.*s' is already declared in this scope", SF(name));
@@ -101,6 +106,16 @@ static int declare(int line, Str name, Type *t, int is_mut, int by_ptr) {
     l->depth = depth;
     l->is_mut = is_mut;
     l->by_ptr = by_ptr;
+    if (l->id >= fn_locals_cap) {
+        int cap = fn_locals_cap ? fn_locals_cap * 2 : 64;
+        LocalInfo *bigger = arena_alloc(&g_arena, sizeof(LocalInfo) * (size_t)cap);
+        if (fn_locals) memcpy(bigger, fn_locals, sizeof(LocalInfo) * (size_t)fn_locals_cap);
+        fn_locals = bigger;
+        fn_locals_cap = cap;
+    }
+    fn_locals[l->id].name = name;
+    fn_locals[l->id].type = t;
+    fn_locals[l->id].kind = kind;
     return l->id;
 }
 
@@ -127,8 +142,47 @@ static uint64_t const_length(Node *e) {
     return e->ival;
 }
 
+/* A discriminant: a constant integer expression, possibly negative. */
+static int64_t const_int_value(Node *e) {
+    int saved_unsafe = unsafe_depth;
+    unsafe_depth = 0;
+    const_ctx++;
+    Type *t = check_expr(e, ty_i64);
+    const_ctx--;
+    unsafe_depth = saved_unsafe;
+    if (e->kind != N_INT || t->kind != TY_INT) die(e->line, "a discriminant must be a compile-time integer constant");
+    if (e->op) return (int64_t)((uint64_t)0 - e->ival);
+    if (e->ival > (uint64_t)INT64_MAX) die(e->line, "a discriminant must fit in a signed 64-bit integer");
+    return (int64_t)e->ival;
+}
+
 /* ---- types ---- */
-static Node *find_struct(Str name) { return map_get(&struct_map, name); }
+/* structs and enums share one namespace (the map is still called struct_map) */
+static Node *find_decl(Str name) { return map_get(&struct_map, name); }
+static Node *find_struct(Str name) {
+    Node *d = find_decl(name);
+    return d && d->kind == N_STRUCT ? d : NULL;
+}
+static Node *find_enum(Str name) {
+    Node *d = find_decl(name);
+    return d && d->kind == N_ENUM ? d : NULL;
+}
+static Node *find_variant(Node *en, Str name) {
+    for (Node *v = en->a; v; v = v->next)
+        if (str_eq(v->name, name)) return v;
+    return NULL;
+}
+static int list_len(Node *l) {
+    int n = 0;
+    for (; l; l = l->next) n++;
+    return n;
+}
+/* an enum whose variants carry no values: a plain list of named integers */
+static bool enum_fieldless(Type *t) {
+    for (Node *v = t->decl->a; v; v = v->next)
+        if (v->a) return false;
+    return true;
+}
 
 /* Array and pointer types are interned, so two spellings of [i32; 4] are the same Type. */
 static Type *array_type(Type *elem, uint64_t len) {
@@ -184,7 +238,7 @@ static Type *resolve_type(Node *ty) {
     }
     for (int i = 1; i < NPRIMS; i++)
         if (str_is(ty->name, prims[i].name)) return &prims[i];
-    Node *s = find_struct(ty->name);
+    Node *s = find_decl(ty->name);
     if (s) return s->type;
     die(ty->line, "unknown type '%.*s'", SF(ty->name));
 }
@@ -412,9 +466,33 @@ static Type *check_int_literal(Node *n, Type *expect) {
     return t;
 }
 
+/* Does a value of this type contain an enum (itself, or in a field or element)? */
+static bool holds_enum(const Type *t) {
+    switch (t->kind) {
+    case TY_ENUM:
+        return true;
+    case TY_ARRAY:
+        return holds_enum(t->elem);
+    case TY_STRUCT:
+        for (Node *f = t->decl->a; f; f = f->next)
+            if (holds_enum(f->type)) return true;
+        return false;
+    default:
+        return false;
+    }
+}
+
 /* Can a value of this type cross the C boundary? Scalars and pointers by value, structs by value or by
- * pointer, arrays only by pointer (to their first element). */
+ * pointer, arrays only by pointer (to their first element). An enum never does, not even inside a struct:
+ * C code could write a tag that names no variant, and match would then read the wrong values. */
 static void check_c_signature(Node *fn) {
+    for (Node *p = fn->a; p; p = p->next)
+        if (holds_enum(p->type))
+            die(p->line, "parameter '%.*s': an enum cannot cross the C boundary (nor can a struct or array holding one); "
+                         "pass an integer (value as u32)", SF(p->name));
+    if (holds_enum(fn->type))
+        die(fn->line, "function '%.*s': an enum cannot cross the C boundary (nor can a struct or array holding one); "
+                      "return an integer (value as u32)", SF(fn->name));
     for (Node *p = fn->a; p; p = p->next)
         if (p->type->kind == TY_ARRAY && p->op == M_SINK)
             die(p->line, "parameter '%.*s': an array cannot be passed to C by value; use let, inout or set", SF(p->name));
@@ -535,6 +613,278 @@ static Type *check_intrinsic(Node *n, Type *expect) {
     return check_expr_inner(n, expect);
 }
 
+/* ---- enums: constructors, patterns and match ---- */
+
+static Node wild_pat = {.kind = N_PAT, .op = PAT_WILD}; /* padding for the rows of the exhaustiveness check */
+
+static bool irrefutable(const Node *p) { return p->op == PAT_WILD || p->op == PAT_BIND; }
+
+static void check_block(Node *b);
+
+/* Check pattern p against a value of type t, declaring the names it binds. */
+static void check_pattern(Node *p, Type *t, bool in_alternative) {
+    p->type = t;
+    switch (p->op) {
+    case PAT_WILD:
+        break;
+    case PAT_BIND:
+        if (in_alternative) die(p->line, "alternatives joined with '|' cannot bind names");
+        if (t->kind == TY_ENUM && find_variant(t->decl, p->name))
+            die(p->line, "'%.*s' is also a variant of '%s'; write '%s::%.*s' to match it (a bare name is a new variable)",
+                SF(p->name), t->name, t->name, SF(p->name));
+        p->local = declare(p->line, p->name, t, 0, 0, LK_LET);
+        break;
+    case PAT_LIT:
+        if (t == ty_bool) {
+            if (p->a->kind != N_BOOL) die(p->line, "a bool is matched with true or false");
+        } else if (t->kind == TY_INT) {
+            if (p->a->kind == N_BOOL) die(p->line, "a number is matched with a number, not true or false");
+            expect_type(p->line, t, check_expr(p->a, t)); /* folds -5 and range-checks the literal */
+        } else {
+            die(p->line, "a literal cannot match a value of type '%s'", t->name);
+        }
+        break;
+    case PAT_VARIANT: {
+        if (t->kind != TY_ENUM)
+            die(p->line, "'%.*s::%.*s' is a variant of an enum, but the value being matched has type '%s'", SF(p->tyname),
+                SF(p->name), t->name);
+        if (!str_eq(t->decl->name, p->tyname))
+            die(p->line, "the pattern '%.*s::%.*s' does not match the type '%s'", SF(p->tyname), SF(p->name), t->name);
+        Node *v = find_variant(t->decl, p->name);
+        if (!v) die(p->line, "enum '%s' has no variant '%.*s'", t->name, SF(p->name));
+        int want = list_len(v->a), got = list_len(p->a);
+        if (want == 0 && p->flag) die(p->line, "'%s::%.*s' has no values; write the pattern without parentheses", t->name, SF(v->name));
+        if (want != got)
+            die(p->line, "'%s::%.*s' has %d value%s, but the pattern has %d", t->name, SF(v->name), want, want == 1 ? "" : "s", got);
+        Node *f = v->a;
+        for (Node *s = p->a; s; s = s->next, f = f->next) check_pattern(s, f->type, in_alternative);
+        p->decl = v;
+        break;
+    }
+    case PAT_OR:
+        for (Node *alt = p->a; alt; alt = alt->next) check_pattern(alt, t, true);
+        break;
+    }
+}
+
+/* ---- exhaustiveness ----
+ * `rows` is a matrix of patterns, one row per match arm, `ncols` patterns wide, column i matching a value of
+ * types[i]. covers() answers: does every possible value match some row? For an enum column, each variant is
+ * tried in turn: the rows that can match it keep their other columns and gain one column per value the variant
+ * carries (a wildcard row gets wildcards). For bool, true and false are tried. For an integer, only a catch-all
+ * row covers every value. */
+static void *zalloc_(size_t n) { return arena_alloc(&g_arena, n); }
+
+static Node ***expand_alternatives(Node ***rows, int *nrows, int ncols) {
+    int total = 0;
+    for (int r = 0; r < *nrows; r++) total += rows[r][0]->op == PAT_OR ? list_len(rows[r][0]->a) : 1;
+    Node ***out = zalloc_(sizeof(Node **) * (size_t)(total ? total : 1));
+    int k = 0;
+    for (int r = 0; r < *nrows; r++) {
+        Node *p = rows[r][0];
+        if (p->op != PAT_OR) {
+            out[k++] = rows[r];
+            continue;
+        }
+        for (Node *alt = p->a; alt; alt = alt->next) {
+            Node **nr = zalloc_(sizeof(Node *) * (size_t)ncols);
+            memcpy(nr, rows[r], sizeof(Node *) * (size_t)ncols);
+            nr[0] = alt;
+            out[k++] = nr;
+        }
+    }
+    *nrows = k;
+    return out;
+}
+
+static bool covers(Node ***rows, int nrows, Type **types, int ncols);
+
+/* The rows that can match variant v, with the first column replaced by the variant's values: a row for v
+ * contributes its sub-patterns, a catch-all row contributes a wildcard for each value. *ts gets the new column types. */
+static Node ***specialize(Node ***rows, int nrows, Type **types, int ncols, Node *v, int *out_rows, Type ***ts) {
+    int ar = list_len(v->a), width = ar + ncols - 1;
+    Node ***sub = zalloc_(sizeof(Node **) * (size_t)(nrows ? nrows : 1));
+    int m = 0;
+    for (int r = 0; r < nrows; r++) {
+        Node *p = rows[r][0];
+        Node **nr = NULL;
+        if (p->op == PAT_VARIANT && p->decl == v) {
+            nr = zalloc_(sizeof(Node *) * (size_t)(width ? width : 1));
+            int i = 0;
+            for (Node *s = p->a; s; s = s->next) nr[i++] = s;
+            for (int c = 1; c < ncols; c++) nr[i++] = rows[r][c];
+        } else if (irrefutable(p)) {
+            nr = zalloc_(sizeof(Node *) * (size_t)(width ? width : 1));
+            int i = 0;
+            for (; i < ar; i++) nr[i] = &wild_pat;
+            for (int c = 1; c < ncols; c++) nr[i++] = rows[r][c];
+        }
+        if (nr) sub[m++] = nr;
+    }
+    *ts = zalloc_(sizeof(Type *) * (size_t)(width ? width : 1));
+    int i = 0;
+    for (Node *f = v->a; f; f = f->next) (*ts)[i++] = f->type;
+    for (int c = 1; c < ncols; c++) (*ts)[i++] = types[c];
+    *out_rows = m;
+    return sub;
+}
+
+static bool variant_covered(Node ***rows, int nrows, Type **types, int ncols, Node *v) {
+    int m;
+    Type **ts;
+    Node ***sub = specialize(rows, nrows, types, ncols, v, &m, &ts);
+    return covers(sub, m, ts, list_len(v->a) + ncols - 1);
+}
+
+static bool covers(Node ***rows, int nrows, Type **types, int ncols) {
+    if (ncols == 0) return nrows > 0;
+    rows = expand_alternatives(rows, &nrows, ncols);
+    Type *t = types[0];
+    if (t->kind == TY_ENUM) {
+        for (Node *v = t->decl->a; v; v = v->next)
+            if (!variant_covered(rows, nrows, types, ncols, v)) return false;
+        return true;
+    }
+    for (int value = 0; value < (t == ty_bool ? 2 : 1); value++) { /* bool: false, true; others: just "everything else" */
+        Node ***rest = zalloc_(sizeof(Node **) * (size_t)(nrows ? nrows : 1));
+        int m = 0;
+        for (int r = 0; r < nrows; r++) {
+            Node *p = rows[r][0];
+            bool takes = irrefutable(p) || (t == ty_bool && p->op == PAT_LIT && (int)p->a->ival == value);
+            if (takes) rest[m++] = rows[r] + 1;
+        }
+        if (!covers(rest, m, types + 1, ncols - 1)) return false;
+    }
+    return true;
+}
+
+/* ---- unreachable arms ----
+ * The same walk answers the opposite question: can the pattern vector q match some value that none of the
+ * rows (the arms above) matches? If not, the arm is dead code, which is almost certainly a mistake. For
+ * integers only a catch-all row is counted, so an arm is never wrongly called unreachable. */
+static uint64_t lit_bits(const Node *lit) {
+    return lit->kind == N_BOOL ? lit->ival : (lit->op ? (uint64_t)0 - lit->ival : lit->ival);
+}
+
+static bool useful(Node ***rows, int nrows, Node **q, Type **types, int ncols) {
+    if (ncols == 0) return nrows == 0;
+    rows = expand_alternatives(rows, &nrows, ncols);
+    Node *p = q[0];
+    Type *t = types[0];
+    if (p->op == PAT_OR) {
+        for (Node *alt = p->a; alt; alt = alt->next) {
+            Node **q2 = zalloc_(sizeof(Node *) * (size_t)ncols);
+            memcpy(q2, q, sizeof(Node *) * (size_t)ncols);
+            q2[0] = alt;
+            if (useful(rows, nrows, q2, types, ncols)) return true;
+        }
+        return false;
+    }
+    if (t->kind == TY_ENUM) {
+        for (Node *v = t->decl->a; v; v = v->next) {
+            if (p->op == PAT_VARIANT && p->decl != v) continue;
+            int m, ar = list_len(v->a), width = ar + ncols - 1;
+            Type **ts;
+            Node ***sub = specialize(rows, nrows, types, ncols, v, &m, &ts);
+            Node **q2 = zalloc_(sizeof(Node *) * (size_t)(width ? width : 1));
+            int i = 0;
+            if (p->op == PAT_VARIANT) {
+                for (Node *s = p->a; s; s = s->next) q2[i++] = s;
+            } else {
+                for (; i < ar; i++) q2[i] = &wild_pat;
+            }
+            for (int c = 1; c < ncols; c++) q2[i++] = q[c];
+            if (useful(sub, m, q2, ts, width)) return true;
+        }
+        return false;
+    }
+    int values = (p->op != PAT_LIT && t == ty_bool) ? 2 : 1; /* a catch-all on a bool is tried as true, then false */
+    for (int value = 0; value < values; value++) {
+        Node ***rest = zalloc_(sizeof(Node **) * (size_t)(nrows ? nrows : 1));
+        int m = 0;
+        for (int r = 0; r < nrows; r++) {
+            Node *rp = rows[r][0];
+            bool takes;
+            if (irrefutable(rp)) takes = true;
+            else if (p->op == PAT_LIT) takes = lit_bits(rp->a) == lit_bits(p->a);
+            else takes = t == ty_bool && lit_bits(rp->a) == (uint64_t)value;
+            if (takes) rest[m++] = rows[r] + 1;
+        }
+        if (useful(rest, m, q + 1, types + 1, ncols - 1)) return true;
+    }
+    return false;
+}
+
+static void check_exhaustive(Node *m, Type *st) {
+    int n = list_len(m->b), i = 0;
+    Node ***rows = zalloc_(sizeof(Node **) * (size_t)n);
+    for (Node *arm = m->b; arm; arm = arm->next, i++) {
+        rows[i] = zalloc_(sizeof(Node *));
+        rows[i][0] = arm->a;
+    }
+    Type *types[1] = {st};
+    if (covers(rows, n, types, 1)) return;
+    if (st->kind == TY_ENUM) { /* say which variants are not fully covered */
+        int rn = n;
+        Node ***ex = expand_alternatives(rows, &rn, 1);
+        char list[512] = "";
+        int missing = 0;
+        for (Node *v = st->decl->a; v; v = v->next) {
+            if (variant_covered(ex, rn, types, 1, v)) continue;
+            size_t len = strlen(list);
+            snprintf(list + len, sizeof list - len, "%s'%s::%.*s'", missing++ ? ", " : "", st->name, SF(v->name));
+        }
+        die(m->line, "match is not exhaustive: %s %s not fully covered (add %s, or a '_' arm)", list,
+            missing == 1 ? "is" : "are", missing == 1 ? "an arm for it" : "arms for them");
+    }
+    if (st == ty_bool) die(m->line, "match is not exhaustive: it needs arms for both true and false, or a '_' arm");
+    die(m->line, "match is not exhaustive: numbers need a final '_' arm (or a name) that matches everything else");
+}
+
+static bool always_returns(Node *s);
+
+static Type *check_match(Node *m, Type *expect) {
+    Type *st = check_expr(m->a, NULL);
+    if (st->kind != TY_ENUM && st != ty_bool && st->kind != TY_INT)
+        die(m->a->line, "cannot match on a value of type '%s' (match works on enums, integers and bool)", st->name);
+    bool stmt = m->flag; /* a statement: the arms' values, if any, are dropped */
+    Type *result = ty_unit;
+    bool have = false;
+    for (Node *arm = m->b; arm; arm = arm->next) {
+        int save = nlocals;
+        depth++;
+        check_pattern(arm->a, st, false);
+        if (arm->op) { /* a block */
+            if (!stmt && !always_returns(arm->b))
+                die(arm->line,
+                    "a match used as a value needs an expression in every arm; a block arm is only allowed when it ends in 'return'");
+            check_block(arm->b);
+        } else {
+            Type *at = check_expr(arm->b, stmt ? NULL : (have ? result : expect));
+            if (!stmt) {
+                if (at == ty_unit) die(arm->b->line, "this arm has no value, but the match is used as a value");
+                if (!have) result = at;
+                else expect_type(arm->b->line, result, at);
+                have = true;
+            }
+        }
+        depth--;
+        nlocals = save;
+    }
+    if (!stmt && !have) die(m->line, "this match has no arm with a value, but it is used as a value");
+    check_exhaustive(m, st);
+    int n = list_len(m->b), i = 0;
+    Node ***rows = zalloc_(sizeof(Node **) * (size_t)n);
+    for (Node *arm = m->b; arm; arm = arm->next, i++) {
+        rows[i] = zalloc_(sizeof(Node *));
+        rows[i][0] = arm->a;
+        Type *types[1] = {st};
+        if (i > 0 && !useful(rows, i, &arm->a, types, 1))
+            die(arm->line, "this arm can never match: the arms above already match every value it could match");
+    }
+    return stmt ? ty_unit : result;
+}
+
 static Type *check_expr_inner(Node *n, Type *expect) {
     switch (n->kind) {
     case N_INT:
@@ -543,6 +893,23 @@ static Type *check_expr_inner(Node *n, Type *expect) {
         return ty_bool;
     case N_CSTR:
         return ptr_type(ty_u8, false);
+    case N_VARIANT: {
+        Node *ed = find_enum(n->tyname);
+        if (!ed) die(n->line, "unknown enum '%.*s'", SF(n->tyname));
+        Node *v = find_variant(ed, n->name);
+        if (!v) die(n->line, "enum '%.*s' has no variant '%.*s'", SF(ed->name), SF(n->name));
+        int want = list_len(v->a), got = list_len(n->a);
+        if (want == 0 && n->flag)
+            die(n->line, "'%.*s::%.*s' has no values; write it without parentheses", SF(ed->name), SF(v->name));
+        if (want != got)
+            die(n->line, "'%.*s::%.*s' needs %d value%s, got %d", SF(ed->name), SF(v->name), want, want == 1 ? "" : "s", got);
+        Node *f = v->a;
+        for (Node *a = n->a; a; a = a->next, f = f->next) expect_type(a->line, f->type, check_expr(a, f->type));
+        n->decl = v;
+        return ed->type;
+    }
+    case N_MATCH:
+        return check_match(n, expect);
     case N_NAME: {
         Local *l = const_ctx ? NULL : find_local(n->name);
         if (l) {
@@ -632,7 +999,8 @@ static Type *check_expr_inner(Node *n, Type *expect) {
         Type *from = check_expr(n->a, (to->kind == TY_PTR && is_lit(n->a)) ? ty_usize : NULL);
         bool ok = (from == to) || ((from->kind == TY_INT || from == ty_bool) && to->kind == TY_INT) ||
                   (from->kind == TY_INT && to->kind == TY_PTR) || (from->kind == TY_PTR && to->kind == TY_INT) ||
-                  (from->kind == TY_PTR && to->kind == TY_PTR);
+                  (from->kind == TY_PTR && to->kind == TY_PTR) ||
+                  (from->kind == TY_ENUM && enum_fieldless(from) && to->kind == TY_INT);
         if (!ok) die(n->line, "cannot cast '%s' to '%s'", from->name, to->name);
         return to;
     }
@@ -677,8 +1045,9 @@ static Type *check_expr_inner(Node *n, Type *expect) {
             return ty_bool;
         }
         if (op == T_EQ || op == T_NE) {
-            if (lt->kind != TY_INT && lt != ty_bool && lt->kind != TY_PTR)
-                die(n->line, "cannot compare values of type '%s'", lt->name);
+            if (lt->kind != TY_INT && lt != ty_bool && lt->kind != TY_PTR && !(lt->kind == TY_ENUM && enum_fieldless(lt)))
+                die(n->line, "cannot compare values of type '%s'%s", lt->name,
+                    lt->kind == TY_ENUM ? " (an enum that carries values is taken apart with match)" : "");
             return ty_bool;
         }
         if (lt->kind != TY_INT) die(n->line, "operator %s needs integer operands, found '%s'", op_name(op), lt->name);
@@ -751,7 +1120,7 @@ static void check_stmt(Node *s) {
         }
         if (t == ty_unit) die(s->line, "cannot store a value of type 'unit' in '%.*s'", SF(s->name));
         s->type = t;
-        s->local = declare(s->line, s->name, t, s->op, 0);
+        s->local = declare(s->line, s->name, t, s->op, 0, s->op ? LK_VAR : LK_LET);
         break;
     }
     case N_ASSIGN: {
@@ -785,6 +1154,10 @@ static void check_stmt(Node *s) {
             expect_type(s->a->line, cur_fn->type, check_expr(s->a, cur_fn->type));
         }
         break;
+    case N_MATCH:
+        check_match(s, NULL);
+        s->type = ty_unit;
+        break;
     case N_BLOCK:
         if (s->op) unsafe_depth++; /* unsafe { ... } */
         check_block(s);
@@ -803,20 +1176,71 @@ static bool always_returns(Node *s) {
             if (always_returns(c)) return true;
         return false;
     case N_IF: return s->c && always_returns(s->b) && always_returns(s->c);
+    case N_MATCH: /* a match statement returns if every arm is a block that does */
+        if (!s->flag) return false;
+        for (Node *arm = s->b; arm; arm = arm->next)
+            if (!arm->op || !always_returns(arm->b)) return false;
+        return true;
     default: return false;
     }
 }
 
 /* ---- program ---- */
-static void visit_struct(Node *s) { /* reject structs that contain themselves by value */
-    if (s->ival == 1) die(s->line, "struct '%.*s' contains itself", SF(s->name));
-    if (s->ival == 2) return;
-    s->ival = 1;
-    for (Node *f = s->a; f; f = f->next) {
+/* The values each variant carries, the discriminant of each variant, and the integer type of the tag. */
+static void resolve_enum(Node *d) {
+    int64_t next = 0, lo = 0, hi = 0;
+    bool first = true;
+    for (Node *v = d->a; v; v = v->next) {
+        for (Node *w = d->a; w != v; w = w->next)
+            if (str_eq(w->name, v->name)) die(v->line, "variant '%.*s' is declared twice", SF(v->name));
+        for (Node *f = v->a; f; f = f->next) {
+            f->type = resolve_type(f->ty);
+            if (d->type->is_copy && !f->type->is_copy)
+                die(f->line, "'%s' in variant '%.*s' is not copy, so '%.*s' cannot be a copy enum", f->type->name,
+                    SF(v->name), SF(d->name));
+        }
+        int64_t disc = next;
+        if (v->b) {
+            if (v->a) die(v->line, "variant '%.*s' carries values, so it cannot have an explicit discriminant", SF(v->name));
+            disc = const_int_value(v->b);
+        }
+        for (Node *w = d->a; w != v; w = w->next)
+            if ((int64_t)w->ival == disc)
+                die(v->line, "variants '%.*s' and '%.*s' have the same discriminant %lld", SF(w->name), SF(v->name),
+                    (long long)disc);
+        v->ival = (uint64_t)disc;
+        next = (int64_t)((uint64_t)disc + 1);
+        if (first || disc < lo) lo = disc;
+        if (first || disc > hi) hi = disc;
+        first = false;
+    }
+    /* the smallest integer type that holds every discriminant: prims[6] u8, [7] u16, [8] u32, [4] i32, [5] i64 */
+    d->type->tag_type = (lo >= 0 && hi <= 255)            ? &prims[6]
+                        : (lo >= 0 && hi <= 65535)        ? &prims[7]
+                        : (lo >= 0 && hi <= (int64_t)UINT32_MAX) ? &prims[8]
+                        : (lo >= INT32_MIN && hi <= INT32_MAX)   ? &prims[4]
+                                                                 : &prims[5];
+}
+
+static void visit_decl(Node *s);
+
+static void visit_fields(Node *fields) {
+    for (Node *f = fields; f; f = f->next) {
         Type *ft = f->type;
         while (ft->kind == TY_ARRAY) ft = ft->elem; /* an array of S inside S is just as infinite */
-        if (ft->kind == TY_STRUCT) visit_struct(ft->decl);
+        if (ft->kind == TY_STRUCT || ft->kind == TY_ENUM) visit_decl(ft->decl);
     } /* a pointer to S inside S is fine: it has a fixed size */
+}
+
+static void visit_decl(Node *s) { /* reject structs and enums that contain themselves by value */
+    if (s->ival == 1) die(s->line, "%s '%.*s' contains itself", s->kind == N_ENUM ? "enum" : "struct", SF(s->name));
+    if (s->ival == 2) return;
+    s->ival = 1;
+    if (s->kind == N_STRUCT) {
+        visit_fields(s->a);
+    } else {
+        for (Node *v = s->a; v; v = v->next) visit_fields(v->a);
+    }
     s->ival = 2;
 }
 
@@ -838,9 +1262,12 @@ static void check_fn(Node *fn) {
     next_id = 0;
     unsafe_depth = 0;
     for (Node *p = fn->a; p; p = p->next)
-        p->local = declare(p->line, p->name, p->type, p->op == M_INOUT || p->op == M_SET, p->op == M_INOUT || p->op == M_SET);
+        p->local = declare(p->line, p->name, p->type, p->op == M_INOUT || p->op == M_SET, p->op == M_INOUT || p->op == M_SET,
+                           p->op == M_INOUT ? LK_INOUT : p->op == M_SET ? LK_SET : p->op == M_SINK ? LK_SINK : LK_LETPARAM);
     check_block(fn->b);
     fn->nlocals = next_id;
+    fn->linfo = arena_alloc(&g_arena, sizeof(LocalInfo) * (size_t)(next_id ? next_id : 1));
+    if (next_id) memcpy(fn->linfo, fn_locals, sizeof(LocalInfo) * (size_t)next_id);
     if (fn->type != ty_unit && !always_returns(fn->b))
         die(fn->line, "function '%.*s' does not return a value on every path", SF(fn->name));
 }
@@ -861,7 +1288,7 @@ void check_program(Node *program) {
     /* 1. declare struct, function and constant names */
     size_t nstructs = 0, nfns = 0, nconsts = 0;
     for (Node *d = prog; d; d = d->next) {
-        if (d->kind == N_STRUCT) nstructs++;
+        if (d->kind == N_STRUCT || d->kind == N_ENUM) nstructs++;
         else if (d->kind == N_CONST) nconsts++;
         else nfns++;
     }
@@ -869,16 +1296,18 @@ void check_program(Node *program) {
     map_init(&fn_map, nfns);
     map_init(&const_map, nconsts);
     for (Node *d = prog; d; d = d->next) {
-        Map *m = d->kind == N_STRUCT ? &struct_map : d->kind == N_CONST ? &const_map : &fn_map;
+        bool is_type = d->kind == N_STRUCT || d->kind == N_ENUM;
+        Map *m = is_type ? &struct_map : d->kind == N_CONST ? &const_map : &fn_map;
         if (!map_put(m, d->name, d)) die(d->line, "'%.*s' is defined twice", SF(d->name));
-        if (d->kind == N_STRUCT) {
+        if (is_type) {
             for (int i = 0; i < NPRIMS; i++)
                 if (str_is(d->name, prims[i].name)) die(d->line, "'%.*s' is a builtin type", SF(d->name));
             Type *t = ARENA_NEW(&g_arena, Type);
-            t->kind = TY_STRUCT;
+            t->kind = d->kind == N_ENUM ? TY_ENUM : TY_STRUCT;
+            t->nleaves = d->kind == N_ENUM ? 1 : 0; /* flow treats an enum as one unit, like an array */
             t->name = arena_strn(&g_arena, d->name.p, d->name.n);
             char *cn = arena_alloc(&g_arena, (size_t)d->name.n + 3);
-            memcpy(cn, "s_", 2);
+            memcpy(cn, d->kind == N_ENUM ? "e_" : "s_", 2);
             memcpy(cn + 2, d->name.p, (size_t)d->name.n);
             t->cname = cn;
             t->decl = d;
@@ -899,7 +1328,9 @@ void check_program(Node *program) {
         }
     }
     for (Node *d = prog; d; d = d->next)
-        if (d->kind == N_STRUCT) visit_struct(d);
+        if (d->kind == N_ENUM) resolve_enum(d);
+    for (Node *d = prog; d; d = d->next)
+        if (d->kind == N_STRUCT || d->kind == N_ENUM) visit_decl(d);
     for (Node *d = prog; d; d = d->next) {
         if (d->kind != N_STRUCT) continue;
         layout_type(d->type);

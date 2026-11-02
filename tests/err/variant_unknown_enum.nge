@@ -1,0 +1,6 @@
+// error: unknown enum 'Nope'
+fn f() -> i32 {
+    let x = Nope::A;
+    return 0;
+}
+fn main() -> i32 { return 0; }

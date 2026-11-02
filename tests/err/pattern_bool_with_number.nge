@@ -1,0 +1,8 @@
+// error: a bool is matched with true or false
+fn f(b: bool) -> i32 {
+    return match b {
+        1 => 1,
+        _ => 2,
+    };
+}
+fn main() -> i32 { return 0; }

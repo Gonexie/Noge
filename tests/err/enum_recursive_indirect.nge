@@ -1,0 +1,4 @@
+// error: struct 'Node' contains itself
+struct Node { next: List }
+enum List { Cons(Node), Nil }
+fn main() -> i32 { return 0; }

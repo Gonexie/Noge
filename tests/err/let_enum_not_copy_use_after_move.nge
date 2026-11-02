@@ -1,0 +1,10 @@
+// error: use of moved value 'a'
+enum Shape { Circle(i32), Rect(i32, i32), Empty }
+
+fn f() -> i32 {
+    let a = Shape::Empty;
+    let b = a;
+    let c = a;
+    return 0;
+}
+fn main() -> i32 { return 0; }

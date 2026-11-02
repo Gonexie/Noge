@@ -1,0 +1,7 @@
+// error: needs arms for both true and false
+fn f(b: bool) -> i32 {
+    return match b {
+        true => 1,
+    };
+}
+fn main() -> i32 { return 0; }

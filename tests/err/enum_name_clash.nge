@@ -1,0 +1,4 @@
+// error: 'E' is defined twice
+struct E { x: i32 }
+enum E { A }
+fn main() -> i32 { return 0; }

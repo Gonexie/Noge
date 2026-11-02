@@ -27,7 +27,6 @@
 #include "noge.h"
 
 enum { LS_UNINIT = 0, LS_INIT = 1, LS_MOVED = 2 };
-enum { LK_VAR, LK_LET, LK_LETPARAM, LK_SINK, LK_INOUT, LK_SET };
 
 typedef struct { bool live; unsigned char *s; } State; /* live=false: unreachable */
 typedef struct { Str name; Type *type; int base, kind; } FLocal;
@@ -88,35 +87,6 @@ static void layout_local(int id, Str name, Type *t, int kind) {
     locs[id].base = nleaves;
     locs[id].kind = kind;
     nleaves += t->nleaves;
-}
-
-static void layout_block(Node *b);
-
-static void layout_stmt(Node *s) {
-    switch (s->kind) {
-    case N_LET:
-        layout_local(s->local, s->name, s->type, s->op ? LK_VAR : LK_LET);
-        break;
-    case N_IF:
-        layout_block(s->b);
-        if (s->c) {
-            if (s->c->kind == N_IF) layout_stmt(s->c);
-            else layout_block(s->c);
-        }
-        break;
-    case N_WHILE:
-        layout_block(s->b);
-        break;
-    case N_BLOCK:
-        layout_block(s);
-        break;
-    default:
-        break;
-    }
-}
-
-static void layout_block(Node *b) {
-    for (Node *s = b->a; s; s = s->next) layout_stmt(s);
 }
 
 /* ---------- places ---------- */
@@ -251,6 +221,7 @@ static void start_borrow(Node *n, Place p, bool write) {
 /* ---------- expressions ---------- */
 
 static void expr(Node *n, bool consume);
+static void block(Node *b);
 
 /* Evaluate the index expressions inside a place, outermost first. */
 static void path_exprs(Node *n) {
@@ -264,12 +235,9 @@ static void path_exprs(Node *n) {
 
 /* Read, copy or move the place `n`. consume=true means "take the value":
  * a copy type is copied, anything else is moved out and left MOVED. */
-static void use_place(Node *n, bool consume) {
-    path_exprs(n);
-    Place p = place_of(n);
-    check_init(n, p);
-    bool moves = consume && !n->type->is_copy;
-    if (moves) {
+/* Take a non-copy place's value away: only an owned, whole place can be moved out of. */
+static void move_place(Node *n, Place p) {
+    {
         if (reporting && p.idx) {
             char nm[160] = "";
             pname(owning_array(n), nm, sizeof nm);
@@ -286,8 +254,16 @@ static void use_place(Node *n, bool consume) {
                 nm, SF(locs[p.local].name));
         }
     }
-    access(n, p, moves ? 'm' : 'r');
-    if (moves) set_range(p.lo, p.hi, LS_MOVED);
+    access(n, p, 'm');
+    set_range(p.lo, p.hi, LS_MOVED);
+}
+
+static void use_place(Node *n, bool consume) {
+    path_exprs(n);
+    Place p = place_of(n);
+    check_init(n, p);
+    if (consume && !n->type->is_copy) move_place(n, p);
+    else access(n, p, 'r');
 }
 
 /* Borrow a place for the rest of the enclosing call. */
@@ -313,6 +289,61 @@ static void check_exit(int line) {
                 cur.s[i] == LS_MOVED ? "moved out" : "never initialized");
         }
     }
+}
+
+/* The names a pattern binds become initialized locals. Returns, through *moves, whether one of them takes a
+ * non-copy value, which moves it out of the value being matched. */
+static void pattern_bind(Node *p, bool *moves) {
+    switch (p->op) {
+    case PAT_BIND: {
+        FLocal *l = &locs[p->local];
+        set_range(l->base, l->base + l->type->nleaves, LS_INIT);
+        if (!p->type->is_copy) *moves = true;
+        break;
+    }
+    case PAT_VARIANT:
+        for (Node *s = p->a; s; s = s->next) pattern_bind(s, moves);
+        break;
+    default: /* wildcards and literals bind nothing; alternatives may not bind */
+        break;
+    }
+}
+
+/* A match is an `if` chain: the scrutinee is evaluated once, each arm starts from the state after it, and the
+ * state afterwards is the meet of the arms that fall out of the bottom. An arm that binds a non-copy value takes
+ * it out of the scrutinee (an enum is one unit, so the whole thing is gone afterwards). */
+static void do_match(Node *m) {
+    Node *scrut = m->a;
+    bool is_pl = is_place(scrut);
+    Place sp = {0};
+    if (is_pl) {
+        path_exprs(scrut);
+        sp = place_of(scrut);
+        check_init(scrut, sp);
+    } else {
+        expr(scrut, true);
+    }
+    State entry = st_clone(&cur);
+    State merged = {0};
+    bool have = false;
+    for (Node *arm = m->b; arm; arm = arm->next) {
+        cur = st_clone(&entry);
+        bool moves = false;
+        pattern_bind(arm->a, &moves);
+        if (is_pl) {
+            if (moves) move_place(scrut, sp);
+            else access(scrut, sp, 'r');
+        }
+        if (arm->op) block(arm->b);
+        else expr(arm->b, true);
+        if (!have) {
+            merged = cur;
+            have = true;
+        } else {
+            st_meet(&merged, &cur);
+        }
+    }
+    cur = merged;
 }
 
 static void call(Node *n) {
@@ -356,17 +387,17 @@ static void expr(Node *n, bool consume) {
         else expr(n->a, true);
         break;
     case N_UN:
-    case N_CAST:
-        expr(n->a, true);
+    case N_CAST: /* operators only look at their operands (a plain enum compared or cast stays usable) */
+        expr(n->a, false);
         break;
     case N_BIN:
-        expr(n->a, true);
+        expr(n->a, false);
         if (n->op == T_ANDAND || n->op == T_OROR) { /* the right side runs only sometimes */
             State skipped = st_clone(&cur);
-            expr(n->b, true);
+            expr(n->b, false);
             st_meet(&cur, &skipped);
         } else {
-            expr(n->b, true);
+            expr(n->b, false);
         }
         break;
     case N_CALL:
@@ -380,6 +411,12 @@ static void expr(Node *n, bool consume) {
         break;
     case N_REPEAT:
         expr(n->a, true);
+        break;
+    case N_VARIANT: /* Enum::Variant(values): the values are taken in order, like a struct literal's fields */
+        for (Node *a = n->a; a; a = a->next) expr(a, true);
+        break;
+    case N_MATCH:
+        do_match(n);
         break;
     case N_PTROP: /* raw pointers are plain values; what they point at is not tracked */
         expr(n->a, true);
@@ -460,6 +497,9 @@ static void stmt(Node *s) {
         check_exit(s->line);
         cur.live = false;
         break;
+    case N_MATCH:
+        do_match(s);
+        break;
     case N_BLOCK:
         block(s);
         break;
@@ -475,11 +515,7 @@ static void flow_fn(Node *fn) {
     locs = arena_alloc(&g_arena, sizeof(FLocal) * (size_t)(fn->nlocals ? fn->nlocals : 1));
     nleaves = 0;
     nlive = 0;
-    for (Node *p = fn->a; p; p = p->next) {
-        int kind = p->op == M_INOUT ? LK_INOUT : p->op == M_SET ? LK_SET : p->op == M_SINK ? LK_SINK : LK_LETPARAM;
-        layout_local(p->local, p->name, p->type, kind);
-    }
-    layout_block(fn->b);
+    for (int id = 0; id < fn->nlocals; id++) layout_local(id, fn->linfo[id].name, fn->linfo[id].type, fn->linfo[id].kind);
     cur = st_new();
     for (Node *p = fn->a; p; p = p->next) {
         FLocal *l = &locs[p->local];

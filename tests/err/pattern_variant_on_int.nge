@@ -1,0 +1,10 @@
+// error: is a variant of an enum, but the value being matched has type 'i32'
+enum Shape { Circle(i32), Rect(i32, i32), Empty }
+
+fn f(n: i32) -> i32 {
+    return match n {
+        Shape::Empty => 1,
+        _ => 2,
+    };
+}
+fn main() -> i32 { return 0; }

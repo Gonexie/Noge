@@ -63,6 +63,7 @@ static Node *parse_type(void) {
 }
 
 static Node *parse_block(void);
+static Node *parse_match(void);
 
 static Node *parse_primary(void) {
     Token *t = cur();
@@ -121,8 +122,32 @@ static Node *parse_primary(void) {
         expect(T_RPAREN);
         return e;
     }
+    case T_MATCH:
+        return parse_match();
     case T_IDENT: {
         advance();
+        if (cur()->kind == T_COLONCOLON) { /* Enum::Variant or Enum::Variant(values) */
+            advance();
+            Token *v = expect(T_IDENT);
+            Node *n = mk(N_VARIANT, t->line);
+            n->tyname = t->text;
+            n->name = v->text;
+            if (cur()->kind == T_LPAREN) {
+                advance();
+                n->flag = 1;
+                int save = nolit;
+                nolit = 0;
+                Node **tail = &n->a;
+                while (cur()->kind != T_RPAREN) {
+                    *tail = parse_expr();
+                    tail = &(*tail)->next;
+                    if (!accept(T_COMMA)) break;
+                }
+                nolit = save;
+                expect(T_RPAREN);
+            }
+            return n;
+        }
         if (cur()->kind == T_LPAREN) { /* call */
             advance();
             Node *n = mk(N_CALL, t->line);
@@ -313,6 +338,11 @@ static Node *parse_stmt(void) {
     }
     case T_LBRACE:
         return parse_block();
+    case T_MATCH: { /* a match used as a statement needs no semicolon */
+        Node *m = parse_match();
+        m->flag = 1;
+        return m;
+    }
     case T_UNSAFE: { /* unsafe { ... }: an ordinary block whose op is 1 */
         advance();
         Node *b = parse_block();
@@ -346,6 +376,158 @@ static Node *parse_block(void) {
     }
     b->end_line = advance()->line;
     return b;
+}
+
+/* ---- patterns ----
+ *   Pattern ::= Atom ("|" Atom)*          alternatives (they may not bind names)
+ *   Atom    ::= "_"  |  name  |  literal  |  Enum "::" Variant [ "(" Pattern, ... ")" ]
+ * N_PAT: op is PAT_WILD, PAT_BIND (name), PAT_LIT (a = the literal), PAT_VARIANT (tyname::name, a = sub-patterns)
+ * or PAT_OR (a = the alternatives). */
+static Node *mk_pat(int kind, int line) {
+    Node *p = mk(N_PAT, line);
+    p->op = kind;
+    return p;
+}
+
+static Node *parse_pattern(void);
+
+static Node *parse_pattern_atom(void) {
+    Token *t = cur();
+    switch (t->kind) {
+    case T_INT:
+    case T_MINUS:
+    case T_TRUE:
+    case T_FALSE: {
+        Node *p = mk_pat(PAT_LIT, t->line);
+        Node *e;
+        if (t->kind == T_MINUS) { /* a negative number: the same tree as the expression -5 */
+            advance();
+            Token *i = expect(T_INT);
+            e = mk(N_UN, t->line);
+            e->op = T_MINUS;
+            e->a = mk(N_INT, i->line);
+            e->a->ival = i->ival;
+        } else if (t->kind == T_INT) {
+            advance();
+            e = mk(N_INT, t->line);
+            e->ival = t->ival;
+        } else {
+            advance();
+            e = mk(N_BOOL, t->line);
+            e->ival = t->kind == T_TRUE;
+        }
+        p->a = e;
+        return p;
+    }
+    case T_IDENT: {
+        advance();
+        if (cur()->kind == T_COLONCOLON) { /* Enum::Variant, maybe with sub-patterns */
+            advance();
+            Token *v = expect(T_IDENT);
+            Node *p = mk_pat(PAT_VARIANT, t->line);
+            p->tyname = t->text;
+            p->name = v->text;
+            if (accept(T_LPAREN)) {
+                p->flag = 1;
+                Node **tail = &p->a;
+                while (cur()->kind != T_RPAREN) {
+                    *tail = parse_pattern();
+                    tail = &(*tail)->next;
+                    if (!accept(T_COMMA)) break;
+                }
+                expect(T_RPAREN);
+            }
+            return p;
+        }
+        if (str_is(t->text, "_")) return mk_pat(PAT_WILD, t->line);
+        Node *p = mk_pat(PAT_BIND, t->line);
+        p->name = t->text;
+        return p;
+    }
+    default:
+        die(t->line, "expected a pattern, found %s", describe(t));
+    }
+}
+
+static Node *parse_pattern(void) {
+    Node *first = parse_pattern_atom();
+    if (cur()->kind != T_PIPE) return first;
+    Node *alt = mk_pat(PAT_OR, first->line);
+    alt->a = first;
+    Node **tail = &first->next;
+    while (accept(T_PIPE)) {
+        *tail = parse_pattern_atom();
+        tail = &(*tail)->next;
+    }
+    return alt;
+}
+
+/* match scrutinee { pattern => { statements }   pattern => expression,  ... } */
+static Node *parse_match(void) {
+    Token *m = advance();
+    Node *n = mk(N_MATCH, m->line);
+    int save = nolit;
+    nolit = 1; /* `match x {` : the brace opens the arms, not a struct literal */
+    n->a = parse_expr();
+    nolit = 0; /* inside the arms, struct literals are fine again */
+    expect(T_LBRACE);
+    Node **tail = &n->b;
+    while (cur()->kind != T_RBRACE) {
+        Node *arm = mk(N_ARM, cur()->line);
+        arm->a = parse_pattern();
+        expect(T_FATARROW);
+        if (cur()->kind == T_LBRACE) { /* a block arm: statements, no value */
+            arm->op = 1;
+            arm->b = parse_block();
+            accept(T_COMMA);
+        } else { /* an expression arm */
+            arm->b = parse_expr();
+            if (cur()->kind != T_RBRACE) expect(T_COMMA);
+            else accept(T_COMMA);
+        }
+        *tail = arm;
+        tail = &arm->next;
+    }
+    nolit = save;
+    expect(T_RBRACE);
+    if (!n->b) die(m->line, "a match needs at least one arm");
+    return n;
+}
+
+/* enum Name { Plain, WithValues(T, U), Numbered = 7, ... }   (also: copy enum) */
+static Node *parse_enum(bool is_copy) {
+    int line = advance()->line;
+    Node *e = mk(N_ENUM, line);
+    e->op = is_copy;
+    e->name = expect(T_IDENT)->text;
+    expect(T_LBRACE);
+    Node **tail = &e->a;
+    int index = 0;
+    while (cur()->kind != T_RBRACE) {
+        Token *v = expect(T_IDENT);
+        Node *vd = mk(N_VDECL, v->line);
+        vd->name = v->text;
+        vd->index = index++;
+        if (accept(T_LPAREN)) {
+            vd->flag = 1;
+            Node **ft = &vd->a;
+            while (cur()->kind != T_RPAREN) {
+                Node *fd = mk(N_FDECL, cur()->line);
+                fd->ty = parse_type();
+                *ft = fd;
+                ft = &fd->next;
+                if (!accept(T_COMMA)) break;
+            }
+            expect(T_RPAREN);
+        }
+        if (accept(T_ASSIGN)) vd->b = parse_expr(); /* an explicit discriminant */
+        *tail = vd;
+        tail = &vd->next;
+        if (!accept(T_COMMA)) break;
+    }
+    expect(T_RBRACE);
+    if (!e->a) die(line, "enum '%.*s' needs at least one variant", SF(e->name));
+    return e;
 }
 
 static Node *parse_struct(bool is_copy) {
@@ -436,12 +618,13 @@ Node *parse_program(Token *tokens) {
         }
         else if (cur()->kind == T_CONST) d = parse_const();
         else if (cur()->kind == T_STRUCT) d = parse_struct(false);
+        else if (cur()->kind == T_ENUM) d = parse_enum(false);
         else if (cur()->kind == T_IDENT && str_is(cur()->text, "copy")) {
             advance();
-            if (cur()->kind != T_STRUCT)
-                die(cur()->line, "expected 'struct' after 'copy', found %s", describe(cur()));
-            d = parse_struct(true);
-        } else die(cur()->line, "expected 'fn', 'struct', 'copy struct', 'const', 'extern' or 'export', found %s", describe(cur()));
+            if (cur()->kind == T_ENUM) d = parse_enum(true);
+            else if (cur()->kind == T_STRUCT) d = parse_struct(true);
+            else die(cur()->line, "expected 'struct' or 'enum' after 'copy', found %s", describe(cur()));
+        } else die(cur()->line, "expected 'fn', 'struct', 'enum', 'copy struct', 'const', 'extern' or 'export', found %s", describe(cur()));
         *tail = d;
         tail = &d->next;
     }

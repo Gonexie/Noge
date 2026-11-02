@@ -1,0 +1,7 @@
+// error: cannot match on a value of type '[i32; 2]'
+fn f(a: [i32; 2]) -> i32 {
+    return match a {
+        _ => 1,
+    };
+}
+fn main() -> i32 { return 0; }

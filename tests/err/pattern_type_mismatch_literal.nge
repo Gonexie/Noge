@@ -1,0 +1,8 @@
+// error: a number is matched with a number, not true or false
+fn f(n: i32) -> i32 {
+    return match n {
+        true => 1,
+        _ => 2,
+    };
+}
+fn main() -> i32 { return 0; }

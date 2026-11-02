@@ -1,0 +1,8 @@
+// error: 'Shape::Circle' needs 1 value, got 0
+enum Shape { Circle(i32), Rect(i32, i32), Empty }
+
+fn f() -> i32 {
+    let x = Shape::Circle;
+    return 0;
+}
+fn main() -> i32 { return 0; }

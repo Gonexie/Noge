@@ -1,0 +1,10 @@
+// error: 'Circle' is also a variant of 'Shape'; write 'Shape::Circle' to match it
+enum Shape { Circle(i32), Rect(i32, i32), Empty }
+
+fn f(s: Shape) -> i32 {
+    return match s {
+        Circle => 1,
+        _ => 2,
+    };
+}
+fn main() -> i32 { return 0; }

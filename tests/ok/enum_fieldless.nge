@@ -1,0 +1,71 @@
+// Enums without values are named numbers: they turn into integers with `as`, and compare with == and !=.
+enum Color { Red, Green, Blue }                // 0, 1, 2
+enum Level { Low = 10, Mid = 20, High = 30 }
+enum Step { A = 5, B, C, D = 100, E }          // 5, 6, 7, 100, 101: a variant without `=` is the previous one plus 1
+enum Sign { Neg = -1, Zero, Pos }              // -1, 0, 1
+enum Big { Small = 1000, Huge = 70000 }        // does not fit in 16 bits
+
+fn name_of(c: Color) -> i32 {
+    return match c {
+        Color::Red => 100,
+        Color::Green => 200,
+        Color::Blue => 300,
+    };
+}
+
+fn next(c: Color) -> Color {
+    return match c {
+        Color::Red => Color::Green,
+        Color::Green => Color::Blue,
+        Color::Blue => Color::Red,
+    };
+}
+
+fn main() -> i32 {
+    print(Color::Red as i32);          // 0
+    print(Color::Green as i32);        // 1
+    print(Color::Blue as i32);         // 2
+    print(Level::Low as i32);          // 10
+    print(Level::High as i32);         // 30
+    print(Step::A as i32);             // 5
+    print(Step::B as i32);             // 6
+    print(Step::C as i32);             // 7
+    print(Step::D as i32);             // 100
+    print(Step::E as i32);             // 101
+    print(Sign::Neg as i32);           // -1
+    print(Sign::Zero as i32);          // 0
+    print(Sign::Pos as i32);           // 1
+    print(Big::Small as i32);          // 1000
+    print(Big::Huge as i32);           // 70000
+
+    // casts follow the usual rules for integers: they wrap
+    print(Big::Huge as u8 as i32);     // 70000 mod 256 = 112
+    print(Sign::Neg as u8 as i32);     // 255
+    print(Level::Mid as i64 as i32);   // 20
+
+    // a variable holding a plain enum
+    var c = Color::Red;
+    var steps = 0;
+    while c != Color::Blue {
+        c = next(c);
+        steps = steps + 1;
+    }
+    print(steps);                      // 2
+    print(name_of(c));                 // 300
+    print(c as i32);                   // 2
+    if c == Color::Blue { print(1); } else { print(0); }   // 1
+    if c == Color::Red { print(1); } else { print(0); }    // 0
+    if Level::Low == Level::Low { print(1); } else { print(0); }    // 1
+    if Level::Low != Level::High { print(1); } else { print(0); }   // 1
+
+    // in a struct and in an array
+    let levels = [Level::High, Level::Low, Level::Mid];
+    var sum = 0;
+    var i = 0;
+    while i < len(levels) {
+        sum = sum + levels[i] as i32;
+        i = i + 1;
+    }
+    print(sum);                        // 60
+    return 0;
+}

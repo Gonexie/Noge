@@ -1,0 +1,9 @@
+// error: a block arm is only allowed when it ends in 'return'
+fn f(n: i32) -> i32 {
+    let x = match n {
+        0 => 1,
+        _ => { print(5); }
+    };
+    return x;
+}
+fn main() -> i32 { return 0; }

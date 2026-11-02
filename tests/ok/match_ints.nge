@@ -1,0 +1,93 @@
+// match on integers and bool: literals (negative ones too), alternatives with '|', and a name or '_'
+// for everything else. The arms are tried from the top; the first that fits is used.
+fn classify(n: i32) -> i32 {
+    return match n {
+        0 => 100,
+        1 | 2 | 3 => 200,
+        -1 => 300,
+        -5 | -6 => 400,
+        _ => 999,
+    };
+}
+
+fn small(n: u8) -> i32 {
+    return match n {
+        0 => 10,
+        255 => 20,
+        x => x as i32,            // a name takes the whole value
+    };
+}
+
+fn flag(b: bool) -> i32 {
+    return match b {
+        true => 1,
+        false => 0,
+    };
+}
+
+fn both(a: bool, b: bool) -> i32 {
+    return match a {
+        true => match b { true => 3, false => 2 },
+        false => match b { true => 1, false => 0 },
+    };
+}
+
+fn wide(n: i64) -> i32 {
+    return match n {
+        -9223372036854775808 => 1,
+        9223372036854775807 => 2,
+        _ => 0,
+    };
+}
+
+fn top(n: u64) -> i32 {
+    return match n {
+        0 => 1,
+        18446744073709551615 => 2,
+        _ => 3,
+    };
+}
+
+fn main() -> i32 {
+    print(classify(0));      // 100
+    print(classify(2));      // 200
+    print(classify(3));      // 200
+    print(classify(-1));     // 300
+    print(classify(-6));     // 400
+    print(classify(4));      // 999
+    print(classify(-2));     // 999
+    print(small(0));         // 10
+    print(small(255));       // 20
+    print(small(77));        // 77
+    print(flag(true));       // 1
+    print(flag(false));      // 0
+    print(both(true, true));     // 3
+    print(both(true, false));    // 2
+    print(both(false, true));    // 1
+    print(both(false, false));   // 0
+    print(wide(-9223372036854775807 - 1));   // 1
+    print(wide(9223372036854775807));        // 2
+    print(wide(5));                          // 0
+    print(top(0));                           // 1
+    print(top(18446744073709551615));        // 2
+    print(top(12345));                       // 3
+
+    // a match used as a statement, in a loop
+    var i = 0;
+    var even = 0;
+    var odd = 0;
+    while i < 10 {
+        match i % 2 {
+            0 => { even = even + 1; }
+            _ => { odd = odd + 1; }
+        }
+        i = i + 1;
+    }
+    print(even);             // 5
+    print(odd);              // 5
+
+    // the match is a value inside a larger expression
+    let k = 3;
+    print(1 + match k { 3 => 10, _ => 20 } * 2);     // 21
+    return 0;
+}

@@ -1,0 +1,3 @@
+// error: variant 'A' is declared twice
+enum E { A, B, A }
+fn main() -> i32 { return 0; }

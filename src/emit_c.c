@@ -55,12 +55,21 @@ static void put_place(const IrPlace *p) {
         put_var(p->base);
     }
     for (Proj *pr = p->proj; pr; pr = pr->next) {
-        if (pr->field) {
+        switch (pr->kind) {
+        case PK_FIELD:
             fprintf(out, ".m_%.*s", SF(pr->field->name));
-        } else {
+            break;
+        case PK_INDEX:
             fputs(".v[", out);
             put_operand(pr->idx);
             fputc(']', out);
+            break;
+        case PK_TAG:
+            fputs(".tag", out);
+            break;
+        default: /* PK_PAYLOAD */
+            fprintf(out, ".u.v_%.*s.f%d", SF(pr->variant->name), pr->fidx);
+            break;
         }
     }
 }
@@ -442,6 +451,25 @@ static void emit_instr(Instr *i, int d) {
         fputs(" };\n", out);
         break;
     }
+    case I_MKENUM: {
+        Operand tag = {0};
+        tag.c = i->variant->ival;
+        tag.type = i->type->tag_type;
+        put_def(i, d);
+        fprintf(out, "(%s){ .tag = ", i->type->cname);
+        put_operand(tag);
+        if (i->nops) {
+            fprintf(out, ", .u.v_%.*s = { ", SF(i->variant->name));
+            for (int k = 0; k < i->nops; k++) {
+                if (k) fputs(", ", out);
+                fprintf(out, ".f%d = ", k);
+                put_operand(i->ops[k]);
+            }
+            fputs(" }", out);
+        }
+        fputs(" };\n", out);
+        break;
+    }
     case I_MKARRAY:
         put_def(i, d);
         fprintf(out, "(%s){ { ", i->type->cname);
@@ -549,8 +577,29 @@ static void emit_block(Block *b, int d) {
 
 static void emit_type_def(Type *t) { /* components first, so by-value members are complete */
     if (t->mark) return;
-    if (t->kind != TY_STRUCT && t->kind != TY_ARRAY) return;
+    if (t->kind != TY_STRUCT && t->kind != TY_ARRAY && t->kind != TY_ENUM) return;
     t->mark = 1;
+    if (t->kind == TY_ENUM) { /* a tag, and a union with one member per variant that carries values */
+        bool any = false;
+        for (Node *v = t->decl->a; v; v = v->next) {
+            for (Node *f = v->a; f; f = f->next) emit_type_def(f->type);
+            any |= v->a != NULL;
+        }
+        fprintf(out, "struct %s {\n    %s tag;\n", t->cname, t->tag_type->cname);
+        if (any) {
+            fputs("    union {\n", out);
+            for (Node *v = t->decl->a; v; v = v->next) {
+                if (!v->a) continue;
+                fputs("        struct {", out);
+                int k = 0;
+                for (Node *f = v->a; f; f = f->next, k++) fprintf(out, " %s f%d;", f->type->cname, k);
+                fprintf(out, " } v_%.*s;\n", SF(v->name));
+            }
+            fputs("    } u;\n", out);
+        }
+        fputs("};\n\n", out);
+        return;
+    }
     if (t->kind == TY_ARRAY) {
         emit_type_def(t->elem);
         fprintf(out, "struct %s {\n    %s v[%lluULL];\n};\n\n", t->cname, t->elem->cname, (unsigned long long)t->len);
@@ -672,13 +721,13 @@ void emit_c(FILE *f, Node *prog, IrFunc *funcs, const EmitOpts *o) {
     emit_prelude(g_file);
 
     for (Node *d = prog; d; d = d->next)
-        if (d->kind == N_STRUCT) fprintf(out, "typedef struct %s %s;\n", d->type->cname, d->type->cname);
+        if (d->kind == N_STRUCT || d->kind == N_ENUM) fprintf(out, "typedef struct %s %s;\n", d->type->cname, d->type->cname);
     for (Type *t = g_array_types; t; t = t->next_array) fprintf(out, "typedef struct %s %s;\n", t->cname, t->cname);
     for (Type *t = g_ptr_types; t; t = t->next_ptr) /* inner pointer types come first */
         fprintf(out, "typedef %s%s *%s;\n", t->is_mut ? "" : "const ", t->elem->cname, t->cname);
     fputc('\n', out);
     for (Node *d = prog; d; d = d->next)
-        if (d->kind == N_STRUCT) emit_type_def(d->type);
+        if (d->kind == N_STRUCT || d->kind == N_ENUM) emit_type_def(d->type);
     for (Type *t = g_array_types; t; t = t->next_array) emit_type_def(t);
 
     if (!opts->freestanding) fputs("void f_print(int32_t x);\n", out);

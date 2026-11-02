@@ -1,0 +1,10 @@
+// error: cannot move out of an element of array
+struct Buf { len: i32 }
+enum Slot { Full(Buf), Empty }
+fn f(a: inout [Slot; 2]) -> i32 {
+    return match a[0] {
+        Slot::Full(b) => b.len,
+        Slot::Empty => 0,
+    };
+}
+fn main() -> i32 { return 0; }

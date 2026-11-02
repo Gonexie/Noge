@@ -56,7 +56,9 @@ char *read_file(const char *path);
     X(T_TILDE, "'~'") X(T_SHL, "'<<'") X(T_SHR, "'>>'")                     \
     X(T_LBRACKET, "'['") X(T_RBRACKET, "']'") X(T_STR, "string")           \
     X(T_CSTR, "C string") X(T_UNSAFE, "'unsafe'") X(T_EXTERN, "'extern'")       \
-    X(T_EXPORT, "'export'") X(T_CONST, "'const'") X(T_MUT, "'mut'")
+    X(T_EXPORT, "'export'") X(T_CONST, "'const'") X(T_MUT, "'mut'")             \
+    X(T_FATARROW, "'=>'") X(T_COLONCOLON, "'::'") X(T_ENUM, "'enum'")          \
+    X(T_MATCH, "'match'")
 
 typedef enum {
 #define X(k, s) k,
@@ -82,7 +84,7 @@ Token *lex(const char *src); /* array terminated by several T_EOF tokens */
 
 /* ---- types ---- */
 typedef struct Node Node;
-typedef enum { TY_UNIT, TY_BOOL, TY_INT, TY_STRUCT, TY_ARRAY, TY_PTR } TyKind;
+typedef enum { TY_UNIT, TY_BOOL, TY_INT, TY_STRUCT, TY_ARRAY, TY_PTR, TY_ENUM } TyKind;
 typedef struct Type {
     TyKind kind;
     const char *name;
@@ -97,6 +99,7 @@ typedef struct Type {
     struct Type *next_array; /* all array types, in creation order */
     bool is_mut;             /* pointer: *mut rather than *const (elem is the pointee) */
     struct Type *next_ptr;   /* all pointer types, in creation order */
+    struct Type *tag_type;   /* enum: the integer type of the tag, which holds the discriminant */
     unsigned char mark;      /* emitter: type definition already printed */
 } Type;
 
@@ -105,7 +108,7 @@ extern Type *g_ptr_types;   /* head of the list of pointer types */
 extern Type *ty_usize, *ty_isize;
 extern bool g_freestanding; /* no hosted C library: no stdio, no print */
 extern int g_ptr_bits;      /* width of usize / isize / pointers on the target */
-static inline bool is_aggregate(const Type *t) { return t->kind == TY_STRUCT || t->kind == TY_ARRAY; }
+static inline bool is_aggregate(const Type *t) { return t->kind == TY_STRUCT || t->kind == TY_ARRAY || t->kind == TY_ENUM; }
 
 extern Type *ty_unit, *ty_bool, *ty_i32;
 
@@ -113,12 +116,21 @@ extern Type *ty_unit, *ty_bool, *ty_i32;
 typedef enum {
     /* expressions */
     N_INT, N_BOOL, N_NAME, N_BIN, N_UN, N_ADDR, N_CALL, N_MEMBER, N_LIT,
-    N_INITF, N_CAST, N_INDEX, N_ARRAY, N_REPEAT, N_CSTR, N_PTROP,
+    N_INITF, N_CAST, N_INDEX, N_ARRAY, N_REPEAT, N_CSTR, N_PTROP, N_VARIANT, N_MATCH,
     /* statements */
     N_LET, N_ASSIGN, N_EXPR, N_IF, N_WHILE, N_RETURN, N_BLOCK,
     /* declarations */
-    N_FN, N_PARAM, N_STRUCT, N_FDECL, N_TYPE, N_CONST
+    N_FN, N_PARAM, N_STRUCT, N_FDECL, N_TYPE, N_CONST, N_ENUM, N_VDECL,
+    /* parts of a match */
+    N_ARM, N_PAT
 } NodeKind;
+
+/* N_PAT: what a pattern is */
+enum { PAT_WILD, PAT_BIND, PAT_LIT, PAT_VARIANT, PAT_OR };
+
+/* How a local variable came to be. The flow pass needs to know which ones are borrowed parameters. */
+enum { LK_VAR, LK_LET, LK_LETPARAM, LK_SINK, LK_INOUT, LK_SET };
+typedef struct { Str name; Type *type; int kind; } LocalInfo;
 
 typedef enum { M_LET, M_INOUT, M_SINK, M_SET } ParamMode;
 
@@ -144,6 +156,9 @@ struct Node {
     int nlocals;   /* FN: number of local ids used (params included) */
     int end_line;  /* BLOCK: line of the closing brace */
     int ext;       /* FN: EXT_NONE, EXT_EXTERN (declared in C) or EXT_EXPORT (named for C) */
+    int index;     /* VDECL: position of the variant in its enum */
+    int flag;      /* VDECL / VARIANT / PAT: written with parentheses; MATCH: used as a statement */
+    LocalInfo *linfo; /* FN: every local variable by id (parameters first) */
     uint64_t ival;
     Type *type;  /* resolved type */
     Node *decl;  /* resolved callee / field */

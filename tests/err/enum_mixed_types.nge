@@ -1,0 +1,9 @@
+// error: type mismatch: expected 'Shape', found 'Color'
+enum Shape { Circle(i32), Rect(i32, i32), Empty }
+enum Color { Red }
+fn f() -> i32 {
+    var s = Shape::Empty;
+    s = Color::Red;
+    return 0;
+}
+fn main() -> i32 { return 0; }

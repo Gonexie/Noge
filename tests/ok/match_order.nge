@@ -1,0 +1,47 @@
+// Order of evaluation: the values of a variant left to right, the matched expression exactly once, and
+// only the arm that fits runs.
+enum Pair { Two(i32, i32), One(i32), Zero }
+
+fn t(n: i32) -> i32 {
+    print(n);
+    return n;
+}
+
+fn make(k: i32) -> Pair {
+    print(1000 + k);
+    return match k {
+        0 => Pair::Zero,
+        1 => Pair::One(t(11)),
+        _ => Pair::Two(t(21), t(22)),
+    };
+}
+
+fn main() -> i32 {
+    let p = Pair::Two(t(1), t(2));              // 1, 2
+
+    // make(2) runs once, although several arms look at what it returned
+    let r = match make(2) {                     // 1002, 21, 22
+        Pair::Zero => t(100),
+        Pair::One(a) => t(a + 200),
+        Pair::Two(a, 5) => t(a + 300),
+        Pair::Two(a, b) => t(a * 1000 + b),     // 21022
+    };
+    print(r);                                   // 21022
+
+    let q = match make(1) {                     // 1001, 11
+        Pair::One(a) => t(a + 1),               // 12
+        Pair::Zero => t(500),
+        Pair::Two(_, _) => t(600),
+    };
+    print(q);                                   // 12
+
+    // a match inside an expression: the left side first, then the match, then what follows it
+    let z = t(3) + match make(0) { Pair::Zero => t(4), _ => t(5) } * t(6);   // 3, 1000, 4, 6
+    print(z);                                   // 3 + 4 * 6 = 27
+
+    match make(2) {                             // 1002, 21, 22
+        Pair::Two(a, b) => { print(a + b); }    // 43
+        _ => { print(0); }
+    }
+    return 0;
+}

@@ -1,0 +1,8 @@
+// error: does not fit in 'u8'
+fn f(n: u8) -> i32 {
+    return match n {
+        300 => 1,
+        _ => 2,
+    };
+}
+fn main() -> i32 { return 0; }

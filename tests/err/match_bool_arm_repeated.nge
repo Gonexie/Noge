@@ -1,0 +1,9 @@
+// error: this arm can never match
+fn f(b: bool) -> i32 {
+    return match b {
+        true => 1,
+        false => 2,
+        true => 3,
+    };
+}
+fn main() -> i32 { return 0; }

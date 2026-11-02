@@ -24,12 +24,14 @@ static const struct { const char *s; TokKind k; } keywords[] = {
     {"if", T_IF},       {"else", T_ELSE},     {"while", T_WHILE}, {"return", T_RETURN},
     {"as", T_AS},       {"true", T_TRUE},     {"false", T_FALSE}, {"unsafe", T_UNSAFE},
     {"extern", T_EXTERN}, {"export", T_EXPORT}, {"const", T_CONST}, {"mut", T_MUT},
+    {"enum", T_ENUM},   {"match", T_MATCH},
 };
 
 /* two-character operators first so they win over their prefixes */
 static const struct { const char *s; TokKind k; } puncts[] = {
     {"->", T_ARROW}, {"==", T_EQ},  {"!=", T_NE},     {"<=", T_LE},    {">=", T_GE},
     {"&&", T_ANDAND}, {"||", T_OROR}, {"<<", T_SHL},  {">>", T_SHR},
+    {"=>", T_FATARROW}, {"::", T_COLONCOLON},
     {"(", T_LPAREN}, {")", T_RPAREN}, {"{", T_LBRACE},
     {"}", T_RBRACE}, {",", T_COMMA}, {":", T_COLON},  {";", T_SEMI},   {".", T_DOT},
     {"=", T_ASSIGN}, {"<", T_LT},    {">", T_GT},     {"+", T_PLUS},   {"-", T_MINUS},

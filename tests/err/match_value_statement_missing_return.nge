@@ -1,0 +1,8 @@
+// error: function 'f' does not return a value on every path
+fn f(n: i32) -> i32 {
+    match n {
+        0 => { return 1; }
+        _ => { print(2); }
+    }
+}
+fn main() -> i32 { return 0; }

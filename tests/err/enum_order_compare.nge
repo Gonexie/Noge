@@ -1,0 +1,6 @@
+// error: operator '<' needs integer operands, found 'C'
+enum C { A, B }
+fn f(a: C, b: C) -> bool {
+    return a < b;
+}
+fn main() -> i32 { return 0; }

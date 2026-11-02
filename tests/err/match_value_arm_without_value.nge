@@ -1,0 +1,9 @@
+// error: this arm has no value, but the match is used as a value
+fn f(n: i32) -> i32 {
+    let x = match n {
+        0 => 1,
+        _ => print(5),
+    };
+    return x;
+}
+fn main() -> i32 { return 0; }

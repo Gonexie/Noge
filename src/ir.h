@@ -27,10 +27,15 @@ typedef struct {
     Type *type;
 } Operand;
 
+/* one step into a value */
+enum { PK_FIELD, PK_INDEX, PK_TAG, PK_PAYLOAD };
 typedef struct Proj Proj;
 struct Proj {
-    Node *field; /* struct field, or NULL for an array index */
-    Operand idx; /* the (already bounds-checked) index */
+    int kind;
+    Node *field;   /* PK_FIELD: the struct field */
+    Operand idx;   /* PK_INDEX: the (already bounds-checked) index */
+    Node *variant; /* PK_PAYLOAD: the variant, and which of the values it carries */
+    int fidx;
     Proj *next;
 };
 
@@ -56,6 +61,7 @@ typedef enum {
     I_BOUNDS,   /* trap unless a < len */
     I_MKSTRUCT, /* dst = struct built from ops, in declaration order */
     I_MKARRAY,  /* dst = array built from ops */
+    I_MKENUM,   /* dst = enum value: `variant` with the values in ops */
     I_FILL,     /* dst = array with every element equal to a */
     I_CALL,     /* [dst =] callee(args) */
     I_USE,      /* (void)a: a computed value that is deliberately dropped */
@@ -90,6 +96,7 @@ struct Instr {
     Operand *ops;   /* I_MKSTRUCT / I_MKARRAY */
     int nops;
     Node *callee;   /* I_CALL */
+    Node *variant;  /* I_MKENUM */
     Arg *args;
     int nargs;
     Block then, els; /* I_IF; I_BLOCK uses `then` */

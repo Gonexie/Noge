@@ -1,0 +1,71 @@
+// Enums that carry values: build them, pass them around, keep them in variables, structs and
+// arrays, and take them apart with match.
+enum Shape {
+    Circle(i32),
+    Rect(i32, i32),
+    Empty,
+}
+
+fn area(s: Shape) -> i32 {
+    return match s {
+        Shape::Circle(r) => 3 * r * r,
+        Shape::Rect(w, h) => w * h,
+        Shape::Empty => 0,
+    };
+}
+
+fn scale(s: Shape, k: i32) -> Shape {
+    return match s {
+        Shape::Circle(r) => Shape::Circle(r * k),
+        Shape::Rect(w, h) => Shape::Rect(w * k, h * k),
+        Shape::Empty => Shape::Empty,
+    };
+}
+
+// every arm returns, so the function needs no return after the match
+fn tag_number(s: Shape) -> i32 {
+    match s {
+        Shape::Circle(_) => { return 1; }
+        Shape::Rect(_, _) => { return 2; }
+        Shape::Empty => { return 3; }
+    }
+}
+
+struct Item { shape: Shape, count: i32 }
+
+fn main() -> i32 {
+    let a = Shape::Circle(5);
+    let b = Shape::Rect(3, 4);
+    let c = Shape::Empty;
+    print(area(a));             // 75
+    print(area(b));             // 12
+    print(area(c));             // 0
+    print(area(scale(b, 2)));   // Rect(6, 8): 48
+    print(area(scale(a, 2)));   // Circle(10): 300
+    print(tag_number(a));       // 1
+    print(tag_number(b));       // 2
+    print(tag_number(c));       // 3
+
+    // a variable can be given a new enum value
+    var s = Shape::Empty;
+    print(area(s));             // 0
+    s = Shape::Rect(2, 5);
+    print(area(s));             // 10
+    s = scale(s, 3);            // Rect(6, 15)
+    print(area(s));             // 90
+
+    // inside a struct, and in an array
+    let it = Item { shape: Shape::Circle(2), count: 4 };
+    print(area(it.shape) * it.count);   // 12 * 4 = 48
+    var shapes = [Shape::Empty, Shape::Empty, Shape::Empty];
+    shapes[1] = Shape::Rect(1, 7);
+    shapes[2] = Shape::Circle(1);
+    var total = 0;
+    var i = 0;
+    while i < len(shapes) {
+        total = total + area(shapes[i]);
+        i = i + 1;
+    }
+    print(total);               // 0 + 7 + 3 = 10
+    return 0;
+}

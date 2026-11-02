@@ -1,0 +1,10 @@
+// error: this arm can never match
+fn f(n: u8) -> i32 {
+    return match n {
+        1 | 2 => 1,
+        3 | 2 => 2,
+        2 => 3,
+        _ => 4,
+    };
+}
+fn main() -> i32 { return 0; }

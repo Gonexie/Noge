@@ -1,0 +1,108 @@
+// Matching and ownership: a name in a pattern gets a copy of a copy value, but takes a value that is
+// not copy away from the variable that was matched. State machines change the value they match on.
+struct Buf { len: i32 }                  // not copy
+
+enum Slot {
+    Full(Buf),
+    Empty,
+}
+
+copy enum Dir { North, East, South, West }
+
+enum Light { Red(i32), Green(i32), Yellow(i32) }     // the number is the ticks left
+
+fn len_of(s: Slot) -> i32 {              // '_' takes nothing, so a read-only parameter is fine
+    return match s {
+        Slot::Full(_) => 1,
+        Slot::Empty => 0,
+    };
+}
+
+fn take(s: sink Slot) -> i32 {           // the Buf is moved out of the slot
+    match s {
+        Slot::Full(b) => { return b.len; }
+        Slot::Empty => { return -1; }
+    }
+}
+
+fn turn(d: Dir) -> Dir {
+    return match d {
+        Dir::North => Dir::East,
+        Dir::East => Dir::South,
+        Dir::South => Dir::West,
+        Dir::West => Dir::North,
+    };
+}
+
+fn code(l: Light) -> i32 {
+    return match l {
+        Light::Red(n) => 100 + n,
+        Light::Green(n) => 200 + n,
+        Light::Yellow(n) => 300 + n,
+    };
+}
+
+fn step(l: inout Light) {
+    match l {
+        Light::Red(0) => { l = Light::Green(3); }
+        Light::Red(n) => { l = Light::Red(n - 1); }
+        Light::Green(0) => { l = Light::Yellow(1); }
+        Light::Green(n) => { l = Light::Green(n - 1); }
+        Light::Yellow(0) => { l = Light::Red(2); }
+        Light::Yellow(n) => { l = Light::Yellow(n - 1); }
+    }
+}
+
+// in a match used as a value, an arm may be a block if it ends in 'return'
+fn doubled(l: Light, fallback: i32) -> i32 {
+    let n = match l {
+        Light::Red(n) => n,
+        Light::Green(n) => n,
+        Light::Yellow(_) => { return fallback; }
+    };
+    return n * 2;
+}
+
+fn main() -> i32 {
+    var s = Slot::Full(Buf { len: 7 });
+    print(len_of(s));                // 1
+    match s {
+        Slot::Full(b) => { print(b.len); }       // 7: and s is now moved out
+        Slot::Empty => { print(0); }
+    }
+    s = Slot::Empty;                 // s needs a value again before it is used
+    print(len_of(s));                // 0
+    print(take(Slot::Full(Buf { len: 9 })));     // 9
+    print(take(s));                  // -1
+
+    var d = Dir::North;
+    let start = d;                   // Dir is copy, so d stays usable
+    var i = 0;
+    while i < 6 {
+        d = turn(d);
+        i = i + 1;
+    }
+    print(d as i32);                 // South: 2
+    print(start as i32);             // North: 0
+
+    var l = Light::Red(2);
+    var n = 0;
+    while n < 10 {
+        print(code(l));
+        step(&l);
+        n = n + 1;
+    }
+
+    print(doubled(Light::Red(4), 99));       // 8
+    print(doubled(Light::Green(5), 99));     // 10
+    print(doubled(Light::Yellow(1), 99));    // 99
+
+    // only a copy value is bound here, so g is not moved
+    let g = Light::Green(1);
+    match g {
+        Light::Green(k) => { print(k); }
+        _ => { print(0); }
+    }
+    print(code(g));                  // 201
+    return 0;
+}

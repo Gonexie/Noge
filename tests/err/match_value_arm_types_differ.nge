@@ -1,0 +1,8 @@
+// error: type mismatch: expected 'i32', found 'bool'
+fn f(n: i32) -> i32 {
+    return match n {
+        0 => 1,
+        _ => true,
+    };
+}
+fn main() -> i32 { return 0; }

@@ -1,0 +1,15 @@
+// error: use of moved value 's'
+struct Buf { len: i32 }
+enum Slot { Full(Buf), Empty }
+fn f(x: sink Slot) -> i32 {
+    var s = x;
+    match s {
+        Slot::Full(b) => { print(b.len); }
+        Slot::Empty => { print(0); }
+    }
+    match s {
+        Slot::Full(_) => { return 1; }
+        Slot::Empty => { return 0; }
+    }
+}
+fn main() -> i32 { return 0; }

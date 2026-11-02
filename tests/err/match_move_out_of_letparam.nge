@@ -1,0 +1,10 @@
+// error: cannot move out of 's': 's' is a read-only (let) parameter
+struct Buf { len: i32 }
+enum Slot { Full(Buf), Empty }
+fn f(s: Slot) -> i32 {
+    return match s {
+        Slot::Full(b) => b.len,
+        Slot::Empty => 0,
+    };
+}
+fn main() -> i32 { return 0; }

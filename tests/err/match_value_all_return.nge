@@ -1,0 +1,8 @@
+// error: this match has no arm with a value
+fn f(n: i32) -> i32 {
+    let x = match n {
+        _ => { return 1; }
+    };
+    return x;
+}
+fn main() -> i32 { return 0; }

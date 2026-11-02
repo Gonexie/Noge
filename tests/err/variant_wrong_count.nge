@@ -1,0 +1,8 @@
+// error: 'Shape::Rect' needs 2 values, got 1
+enum Shape { Circle(i32), Rect(i32, i32), Empty }
+
+fn f() -> i32 {
+    let x = Shape::Rect(1);
+    return 0;
+}
+fn main() -> i32 { return 0; }
