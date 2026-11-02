@@ -1,0 +1,23 @@
+// 200 million PCG32 draws into a 1024-bin histogram. Uses the shipped std/rand.nge.
+import "std/rand.nge" as rand;
+
+fn main() -> i32 {
+    var bins: [u32; 1024] = [0; 1024];
+    var r = rand::seed_stream(42, 54);
+    var n: u32 = 0;
+    while n < 200000000 {
+        let v = rand::next(&r);
+        let b = (v >> 22) as usize;
+        bins[b] = bins[b] + 1;
+        n = n + 1;
+    }
+    var chk: u32 = 0;
+    var i: usize = 0;
+    while i < 1024 {
+        chk = wrapping_add(wrapping_mul(chk, 31), bins[i]);
+        i = i + 1;
+    }
+    print(chk as i32);
+    print(bins[0] as i32);
+    return 0;
+}

@@ -1,0 +1,38 @@
+load at start: 0.96 2.01 3.27 1/108 12927
+1000 functions in 10 modules: 21028 lines of Noge, 20051 lines of Rust
+
+both print 1607644741
+
+Noge
+  nogec (front end, one C file)                   0.10 s wall     0.09 s cpu      60 MB
+    + gcc -O0                                     3.88 s wall     3.84 s cpu     210 MB
+    + gcc -O2                                     9.38 s wall     9.27 s cpu     203 MB
+    + clang -O2                                   9.09 s wall     9.00 s cpu     203 MB
+    + tcc (needs --no-builtins C)                 0.07 s wall     0.06 s cpu      13 MB
+  nogec --emit-dir + make -j4, gcc -O0            1.25 s wall     3.90 s cpu       0 MB
+  nogec --emit-dir + make -j4, gcc -O2            2.99 s wall     9.65 s cpu       0 MB
+  (the edited program prints 1221162639 in both languages)
+  one function edited, gcc -O2                    1.07 s wall  (1 C files recompiled)
+
+Rust (one crate)
+  rustc opt-level=0                               1.24 s wall     1.57 s cpu     258 MB
+  rustc opt-level=2 (16 codegen units)            9.45 s wall    31.70 s cpu     304 MB
+  rustc opt-level=2, 1 codegen unit              32.28 s wall    32.08 s cpu     276 MB
+  one function edited, incremental, opt-level=0    0.53 s wall
+  one function edited, incremental, opt-level=2    2.04 s wall
+
+| build | wall s | cpu s | peak MB |
+|---|---:|---:|---:|
+| nogec (front end, one C file) | 0.10 | 0.09 | 60 |
+|   + gcc -O0 | 3.88 | 3.84 | 210 |
+|   + gcc -O2 | 9.38 | 9.27 | 203 |
+|   + clang -O2 | 9.09 | 9.00 | 203 |
+|   + tcc (needs --no-builtins C) | 0.07 | 0.06 | 13 |
+| nogec --emit-dir + make -j4, gcc -O0 | 1.25 | 3.90 |  |
+| nogec --emit-dir + make -j4, gcc -O2 | 2.99 | 9.65 |  |
+| nogec --emit-dir + make, one function edited | 1.07 |  |  | 1 of 12 files recompiled
+| rustc opt-level=0 | 1.24 | 1.57 | 258 |
+| rustc opt-level=2 (16 codegen units) | 9.45 | 31.70 | 304 |
+| rustc opt-level=2, 1 codegen unit | 32.28 | 32.08 | 276 |
+| rustc -C incremental, opt-level=0, one function edited | 0.53 |  |  |
+| rustc -C incremental, opt-level=2, one function edited | 2.04 |  |  |

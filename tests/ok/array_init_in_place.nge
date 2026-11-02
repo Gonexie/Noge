@@ -1,0 +1,25 @@
+// `var a = [v; N]` and `let a = [x, y, z]` build the array in the variable itself: no temporary of the same size
+// and no copy (the run.sh check on the emitted C looks for that). Behaviour must not change.
+fn main() -> i32 {
+    var zeros = [0; 5];
+    var sevens = [7; 4];
+    let lit = [10, 20, 30];
+    var unused = [9; 3];
+    let swapped = [lit[2], lit[1], lit[0]];   // made from another array
+    zeros[2] = sevens[1] + swapped[0];
+    print(zeros[2]);                          // 37
+    print(zeros[0] + zeros[4]);               // 0
+    print(sevens[3]);                         // 7
+    print(swapped[0] * 100 + swapped[2]);     // 3010
+    var total = 0;
+    var k = 0;
+    while k < 3 {
+        var scratch = [k; 4];                 // a new array each time round
+        scratch[0] = scratch[0] + 1;
+        let lit = [lit[0] + k, 0];            // shadows the outer array, made from it
+        total = total + scratch[0] + scratch[3] + lit[0];
+        k = k + 1;
+    }
+    print(total);                             // (1 + 3 + 5) + (10 + 11 + 12) = 42
+    return 0;
+}

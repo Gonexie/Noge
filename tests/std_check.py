@@ -77,7 +77,7 @@ def build_and_run(name, files, flags=()):
             r = subprocess.run([*CC, "-std=c99", "-O1", "-Wall", "-Wextra", "-Wpedantic", "-Werror", "-o", exe, c], capture_output=True, text=True)
             if r.returncode != 0:
                 raise RuntimeError("the emitted C does not build cleanly:\n" + r.stderr[:2000])
-            r = subprocess.run([exe], capture_output=True, text=True, timeout=120)
+            r = subprocess.run(["timeout", "-s", "KILL", "100", exe], capture_output=True, text=True, timeout=120)
             if r.returncode != 0:
                 raise RuntimeError("the program failed (status %d):\n%s" % (r.returncode, r.stderr[:500]))
             outs.append(r.stdout)
@@ -92,7 +92,7 @@ def build_and_run(name, files, flags=()):
         r = subprocess.run(["make", "-s", "-C", sep, "CC=" + " ".join(CC), "CFLAGS=-std=c99 -O1 -Wall -Wextra -Wpedantic -Werror"], capture_output=True, text=True)
         if r.returncode != 0:
             raise RuntimeError("the separate C files do not build cleanly:\n" + (r.stdout + r.stderr)[:2000])
-        r = subprocess.run([os.path.join(sep, "main")], capture_output=True, text=True, timeout=120)
+        r = subprocess.run(["timeout", "-s", "KILL", "100", os.path.join(sep, "main")], capture_output=True, text=True, timeout=120)
         if r.returncode != 0 or r.stdout != outs[0]:
             raise RuntimeError("as separate C files the program printed something else (status %d)" % r.returncode)
         return outs[0]

@@ -1,0 +1,18 @@
+// Arrays built from other arrays and structs: the inner ones are still values that are copied.
+copy struct P { a: i32, b: i32 }
+
+fn main() -> i32 {
+    var grid = [[0; 3]; 2];
+    grid[1][2] = 5;
+    let row = [1, 2, 3];
+    var rows = [row; 2];
+    rows[1][0] = 9;
+    var ps = [P { a: 1, b: 2 }; 3];
+    ps[2].b = 8;
+    let table = [[1, 2], [3, 4]];
+    print(grid[1][2] + grid[0][0]);           // 5
+    print(rows[0][0] * 10 + rows[1][0]);      // 19: changing one row left the other alone
+    print(ps[0].a + ps[2].b);                 // 9
+    print(table[1][0] + table[0][1]);         // 5
+    return 0;
+}

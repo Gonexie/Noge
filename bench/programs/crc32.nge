@@ -1,0 +1,35 @@
+// Table-driven CRC-32 over a 16 MB buffer, eight passes.
+fn main() -> i32 {
+    var table: [u32; 256] = [0; 256];
+    var n: usize = 0;
+    while n < 256 {
+        var c: u32 = n as u32;
+        var k: u32 = 0;
+        while k < 8 {
+            if c & 1 == 1 { c = (c >> 1) ^ 0xEDB8_8320; } else { c = c >> 1; }
+            k = k + 1;
+        }
+        table[n] = c;
+        n = n + 1;
+    }
+    var buf: [u8; 16777216] = [0; 16777216];
+    var x: u32 = 99;
+    var i: usize = 0;
+    while i < 16777216 {
+        x = wrapping_add(wrapping_mul(x, 1664525), 1013904223);
+        buf[i] = (x >> 24) as u8;
+        i = i + 1;
+    }
+    var crc: u32 = 0xFFFF_FFFF;
+    var pass: u32 = 0;
+    while pass < 8 {
+        i = 0;
+        while i < 16777216 {
+            crc = table[((crc ^ (buf[i] as u32)) & 255) as usize] ^ (crc >> 8);
+            i = i + 1;
+        }
+        pass = pass + 1;
+    }
+    print((crc ^ 0xFFFF_FFFF) as i32);
+    return 0;
+}

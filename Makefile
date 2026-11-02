@@ -42,6 +42,12 @@ check-generics: build/nogec
 check-std: build/nogec
 	python3 tests/std_check.py build/nogec
 
+# Noge against Rust: run time of eight programs, and build time of a generated program of 4,000 functions. Needs rustc, gcc,
+# clang and tcc, and takes about 20 minutes; leave the machine alone while it runs (see bench/README.md).
+bench: build/nogec
+	python3 bench/run.py --opt 2 --runs 7
+	python3 bench/compile_bench.py --functions 4000 --modules 20 --runs 3
+
 # Damaged programs must be rejected with a message, never crash the compiler. Build nogec with
 # -fsanitize=address,undefined (see the top of tests/fuzz.py) to make memory errors visible too.
 fuzz: build/nogec
@@ -50,4 +56,4 @@ fuzz: build/nogec
 clean:
 	rm -rf build
 
-.PHONY: test test-target check-arith check-match check-generics check-modules check-separate check-std fuzz clean
+.PHONY: test test-target check-arith check-match check-generics check-modules check-separate check-std bench fuzz clean

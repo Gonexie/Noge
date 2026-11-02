@@ -1,0 +1,26 @@
+// A small register VM: an enum of instructions, a match in the dispatch loop, 200 million instructions.
+copy enum Op { AddI(i64), MulI(i64), ModI(i64), XorC, DecJnz(usize), Halt }
+
+fn main() -> i32 {
+    let code: [Op; 6] = [Op::AddI(7), Op::MulI(3), Op::ModI(1000003), Op::XorC, Op::DecJnz(0), Op::Halt];
+    var acc: i64 = 1;
+    var counter: i64 = 40000000;
+    var pc: usize = 0;
+    var running = true;
+    while running {
+        match code[pc] {
+            Op::AddI(v) => { acc = acc + v; pc = pc + 1; }
+            Op::MulI(v) => { acc = acc * v; pc = pc + 1; }
+            Op::ModI(v) => { acc = acc % v; pc = pc + 1; }
+            Op::XorC => { acc = acc ^ counter; pc = pc + 1; }
+            Op::DecJnz(target) => {
+                counter = counter - 1;
+                if counter != 0 { pc = target; } else { pc = pc + 1; }
+            }
+            Op::Halt => { running = false; }
+        }
+    }
+    print(acc as i32);
+    print(counter as i32);
+    return 0;
+}

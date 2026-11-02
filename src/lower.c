@@ -749,6 +749,18 @@ static void lower_stmt(Node *s) {
         Instr *i;
         if (s->a) {
             Operand init = lower_expr(s->a);
+            /* An array that was just built ([a, b, c] or [v; N]) goes straight into the new variable. Declaring the
+             * variable from a temporary would keep two copies of it on the stack and copy one into the other:
+             * 32 MB of stack and a 16 MB copy for a 16 MB array. */
+            Instr *built = blk->last;
+            if ((s->a->kind == N_REPEAT || s->a->kind == N_ARRAY) && init.var && init.var->is_temp && built &&
+                built->dst == init.var && built->fresh && (built->op == I_FILL || built->op == I_MKARRAY)) {
+                built->dst = v;
+                Instr *use = emit(I_USE, s->line); /* the C compiler must not warn that the variable is never read */
+                use->a = op_var(v);
+                vars[s->local] = v;
+                break;
+            }
             i = emit(I_DECL, s->line);
             i->a = init;
             i->has_init = true;

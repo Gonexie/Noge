@@ -1,0 +1,18 @@
+// Big arrays that start out as zeros, with an initializer and without one. They must not be copied from a zero-filled
+// array stored in the program (the run.sh check looks at the size of the object file).
+fn bump(a: inout [u8; 65536]) { a[7] = a[7] + 3; }
+
+fn main() -> i32 {
+    var a: [u8; 65536] = [0; 65536];
+    bump(&a);
+    var b: [u8; 65536];
+    b = [5; 65536];
+    b[9] = b[9] + 1;
+    var c: [u32; 16384];
+    c = [0; 16384];
+    c[16383] = c[16383] + 40;
+    print(a[7] as i32 + a[8] as i32);         // 3
+    print(b[9] as i32 + b[10] as i32);        // 11
+    print(c[16383] as i32 + c[0] as i32);     // 40
+    return 0;
+}

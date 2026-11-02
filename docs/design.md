@@ -602,7 +602,7 @@ language, and most of the decisions below are about that.
 
 ### How milestone 10 was checked
 
-- **Tests.** The suite is 680 tests with only `gcc` installed (681 with `tcc`, 775 with `clang`, 776 with both). New in it:
+- **Tests.** The suite is 690 tests with only `gcc` installed (691 with `tcc`, 789 with `clang`, 790 with both; 680, 681, 775 and 776 before the benchmark below). New in it:
   8 programs that must be rejected for `unsafe fn` and 12 for character literals, a positive program for each, a multi-file
   one, the nested zero initializers of statics (which fails 21 ways without the fix), 21 `std_*` multi-file programs (12 of
   them end in a failed check inside a std file, which must say the file and the message), 10 more programs that must be
@@ -654,6 +654,37 @@ What this does **not** show: the library was not run on real hardware (QEMU Cort
 `putchar` on one C library; the PCG32 and checksums are checked against references but not against a second
 implementation of Noge; and "each function's comment says when it traps" is a claim a reader should hold the code to, not
 something the tests prove.
+
+## The benchmark against Rust (after milestone 10)
+
+`bench/` compares Noge with Rust on the same algorithms, with overflow and bounds checks on in both, and on a generated
+program of 4,000 functions for build time (`bench/README.md` has the method, the tables and what they do not show). In
+short: run time is the same within what the back end decides (Noge through clang, which shares rustc's LLVM, is on
+average 1.02 times Rust's time over eight programs; through gcc 1.11); an optimized build costs about a third of the CPU
+time of rustc's and finishes sooner only when the program is split into modules and built with `make -j`; debug builds
+and incremental rebuilds are not clearly better. The comparison favours a small language on small plain programs and
+says nothing about generics-heavy code.
+
+Writing it found two faults in the C that Noge writes, both fixed:
+
+- **An array initializer built a temporary and copied it.** `let`/`var x = [v; N]` and `= [a, b, c]` lowered the array into
+  a temporary and then declared the variable from it, which keeps two copies of the array on the stack and copies one into
+  the other (32 MB of stack for a 16 MB array). `lower_stmt` now builds an array that was just made straight into the
+  variable when nothing came between (the temporary stays when the array is built inside a bigger expression).
+- **`T x = {0}` for a big array makes GCC keep a zero-filled copy of it in read-only memory.** A 16 MB array made a 16 MB
+  executable, and on a Cortex-M3 at `-Os` a 1 KB array cost 1,076 bytes of flash and a 64 KB one 65,592. Zero-filled arrays
+  over 64 bytes are now declared and cleared with a loop, which GCC and Clang compile to a `memset` (50 and 54 bytes of
+  flash, and no new C library function is needed on the ARM build). Structs with several members were measured not to
+  have the problem, so only arrays are treated this way; a small array keeps `{0}`. The library firmware shrank from
+  4,964 to 4,872 bytes.
+
+Checked by: the output tests for arrays built in the variable, from another array, in a loop and under a shadowed name,
+and for a big enum payload; a check that the emitted C declares no array-sized temporary; `tests/codegen/`, which compiles
+a program to an object file and fails if the object is over a size (68,168 bytes without the fix, 2,456 with it); the whole
+suite with gcc `-O2` and `-Os`, clang `-O2` and `-Os`, and the sanitizer compiler; the firmware at `-O0` to `-O3` and
+`-Os`; and mutation testing: 18 mutants of the two changes, of which 12 are caught and 6 cannot show (two guards that are
+always true, the 64-byte threshold, and clearing a `var x: [..];` whose value the language does not let anyone read before
+it is assigned).
 
 ## Open questions
 - Do we need Hylo-style `subscript` projections to access into containers without copying, or is `inout` on paths plus arenas enough?

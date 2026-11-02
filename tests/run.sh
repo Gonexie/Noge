@@ -8,6 +8,7 @@
 #   err/*.nge   must be rejected by nogec; line 1 is "// error: <text the message must contain>", and an
 #               optional line 2 "// flags: <nogec options>"
 #   ffi/*.nge   like ok/, linked with ffi/<name>.c (C code the program calls, and that calls it back)
+#   codegen/*.nge  only compiled to an object file, which must be smaller than the size on line 1 ("// object under: N bytes")
 #   free/*.nge  built with --freestanding as a -ffreestanding object that must not need stdio or exit
 #   mod/*/      programs of several files: main.nge (and what it imports) must print main.out; a main.trap holds
 #               text that must be on stderr when the run ends in a failed check (status 101): every line of it
@@ -223,6 +224,31 @@ if sed -n 2p "$tmp/err" | grep -q "'Inner<0>'" && sed -n 3p "$tmp/err" | grep -q
 else
     failed "the notes of a type built inside a generic function are wrong" "$tmp/err"
 fi
+
+# an array initializer is built in the variable itself, not in a temporary of the same size that is then copied
+# (that kept two copies of a big array on the stack)
+"$NOGEC" -o "$tmp/inplace.c" tests/ok/array_init_in_place.nge 2>"$tmp/err"
+if [ "$(grep -cE 'arr_[a-z0-9_]+ t[0-9]+ = ' "$tmp/inplace.c")" -eq 0 ]; then
+    pass=$((pass + 1))
+else
+    grep -E 'arr_[a-z0-9_]+ t[0-9]+ = ' "$tmp/inplace.c" >"$tmp/diff"
+    failed "array initializers go through a temporary again" "$tmp/diff"
+fi
+
+# codegen/*.nge are only compiled to an object file; line 1 is "// object under: N bytes". A big zero-filled array must
+# not be stored in the program and copied from (GCC does that for `T x = {0}`), which made these objects ~30 times bigger.
+for f in tests/codegen/*.nge; do
+    [ -e "$f" ] || continue
+    b=$(basename "$f" .nge)
+    limit=$(sed -n '1s|^// object under: \([0-9]*\) bytes$|\1|p' "$f")
+    if ! "$NOGEC" -o "$tmp/$b.c" "$f" 2>"$tmp/err" || ! $CC -std=c99 -O2 -c -o "$tmp/$b.o" "$tmp/$b.c" 2>>"$tmp/err"; then
+        failed "$f: does not compile" "$tmp/err"
+    elif [ "$(wc -c <"$tmp/$b.o")" -lt "$limit" ]; then
+        pass=$((pass + 1))
+    else
+        failed "$f: the object file is $(wc -c <"$tmp/$b.o") bytes, wanted under $limit"
+    fi
+done
 
 for f in tests/err/*.nge; do
     [ -e "$f" ] || continue

@@ -94,6 +94,39 @@ static void put_fn_ident(Node *fn) {
 
 static void put_zero(Type *t) { fputs(is_aggregate(t) ? "{0}" : "0", out); }
 
+/* About how many bytes a value of type t takes (padding ignored): enough to tell a big array from a small one. */
+static uint64_t approx_bytes(Type *t) {
+    const uint64_t cap = (uint64_t)1 << 30;
+    uint64_t n = 0;
+    switch (t->kind) {
+    case TY_UNIT: return 0;
+    case TY_BOOL: return 1;
+    case TY_INT: return (uint64_t)(t->bits > 8 ? t->bits / 8 : 1);
+    case TY_PTR: return (uint64_t)(g_ptr_bits / 8);
+    case TY_ARRAY: {
+        uint64_t e = approx_bytes(t->elem);
+        return e != 0 && t->len > cap / e ? cap : t->len * e;
+    }
+    case TY_STRUCT:
+        for (Node *f = t->decl->a; f; f = f->next) n += approx_bytes(f->type);
+        return n > cap ? cap : n;
+    case TY_ENUM:
+        n = (uint64_t)(t->tag_type ? t->tag_type->bits / 8 : 1);
+        for (Node *v = t->decl->a; v; v = v->next)
+            for (Node *f = v->a; f; f = f->next) n += approx_bytes(f->type);
+        return n > cap ? cap : n;
+    }
+    return 0;
+}
+
+/* Above this size, `T x = {0};` for an array is written as a declaration and a loop that clears it. A `{0}` for a big
+ * array (the C struct that wraps it) makes GCC keep a zero-filled copy of the whole array in read-only memory and copy
+ * from it: 1 KB of flash for a 1 KB array on a Cortex-M3, a 16 MB executable for a 16 MB array. (A struct with several
+ * members is not treated that way, so only arrays need this.) The loop is what both GCC and Clang turn into a memset. */
+#define BIG_ZERO_BYTES 64
+
+static bool is_big_array(Type *t) { return t->kind == TY_ARRAY && approx_bytes(t) > BIG_ZERO_BYTES; }
+
 static void put_min(Type *t) {
     if (t->is_signed) fprintf(out, "INT%d_MIN", t->bits);
     else fputs("0", out);
@@ -364,10 +397,18 @@ static void emit_instr(Instr *i, int d) {
         ind(d);
         fprintf(out, "%s ", i->dst->type->cname);
         put_var(i->dst);
-        fputs(" = ", out);
-        if (i->has_init) put_operand(i->a);
-        else put_zero(i->dst->type);
-        fputc(';', out);
+        if (!i->has_init && is_big_array(i->dst->type)) {
+            fputs("; { unsigned char *z_ = (unsigned char *)&", out);
+            put_var(i->dst);
+            fputs("; uint64_t n_; for (n_ = 0; n_ < sizeof ", out);
+            put_var(i->dst);
+            fputs("; n_++) z_[n_] = 0; }", out);
+        } else {
+            fputs(" = ", out);
+            if (i->has_init) put_operand(i->a);
+            else put_zero(i->dst->type);
+            fputc(';', out);
+        }
         if (!i->dst->is_temp) {
             fputs(" (void)", out);
             put_var(i->dst);
@@ -485,7 +526,7 @@ static void emit_instr(Instr *i, int d) {
         fputs(" } };\n", out);
         break;
     case I_FILL:
-        if (is_const(i->a) && i->a.c == 0) { /* the common [0; N] */
+        if (is_const(i->a) && i->a.c == 0 && !is_big_array(i->type)) { /* the common small [0; N] */
             put_def(i, d);
             fputs("{0};\n", out);
             break;

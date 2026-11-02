@@ -1,0 +1,19 @@
+// A variable of an enum type with a big payload, declared without an initializer and assigned later.
+copy enum Slot { Empty, Data([u8; 4096], u32) }
+
+fn payload(s: Slot) -> u32 {
+    return match s {
+        Slot::Empty => 0,
+        Slot::Data(d, n) => d[10] as u32 + n,
+    };
+}
+
+fn main() -> i32 {
+    var s: Slot;
+    s = Slot::Data([3; 4096], 5);
+    print(payload(s) as i32);       // 8
+    var t: Slot;
+    t = Slot::Empty;
+    print(payload(t) as i32);       // 0
+    return 0;
+}

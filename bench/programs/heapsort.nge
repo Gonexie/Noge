@@ -1,0 +1,51 @@
+// Heap sort of one million u32 values from a linear congruential generator, written out by hand.
+fn sift_down(a: inout [u32; 1000000], start: usize, end: usize) {
+    var root = start;
+    while 2 * root + 1 < end {
+        var child = 2 * root + 1;
+        if child + 1 < end && a[child] < a[child + 1] { child = child + 1; }
+        if a[root] < a[child] {
+            let t = a[root];
+            a[root] = a[child];
+            a[child] = t;
+            root = child;
+        } else {
+            return;
+        }
+    }
+}
+
+fn main() -> i32 {
+    var a: [u32; 1000000] = [0; 1000000];
+    var x: u32 = 2024;
+    var i: usize = 0;
+    while i < 1000000 {
+        x = wrapping_add(wrapping_mul(x, 1664525), 1013904223);
+        a[i] = x;
+        i = i + 1;
+    }
+    var start: usize = 1000000 / 2;
+    while start > 0 {
+        start = start - 1;
+        sift_down(&a, start, 1000000);
+    }
+    var end: usize = 1000000;
+    while end > 1 {
+        end = end - 1;
+        let t = a[0];
+        a[0] = a[end];
+        a[end] = t;
+        sift_down(&a, 0, end);
+    }
+    var sorted: u32 = 1;
+    var sum: u64 = 0;
+    i = 0;
+    while i < 1000000 {
+        if i > 0 && a[i] < a[i - 1] { sorted = 0; }
+        sum = sum + (a[i] as u64) * ((i % 1000) as u64);
+        i = i + 1;
+    }
+    print(sorted as i32);
+    print((sum % 2000000011) as i32);
+    return 0;
+}

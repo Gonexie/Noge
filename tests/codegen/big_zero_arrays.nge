@@ -1,0 +1,21 @@
+// object under: 40000 bytes
+// Big arrays that start as zeros and are then handed to C code the compiler cannot see into. This is only compiled to an
+// object file (never linked or run); run.sh checks that the object is small. With `T x = {0}` GCC stores a zero-filled
+// copy of each array in the program and copies from it: here about 200 KB, and 1 KB of flash for a 1 KB array on a
+// microcontroller.
+extern "C" fn use_bytes(a: [u8; 65536]);
+extern "C" fn use_words(a: [u32; 16384]);
+extern "C" fn fill_bytes(a: set [u8; 65536]);
+
+fn main() -> i32 {
+    var a: [u8; 65536] = [0; 65536];
+    var c: [u32; 16384] = [0; 16384];
+    var b: [u8; 65536];
+    unsafe {
+        fill_bytes(&b);
+        use_bytes(a);
+        use_words(c);
+        use_bytes(b);
+    }
+    return 0;
+}

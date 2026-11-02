@@ -13,6 +13,7 @@ make check-modules   # every positive test cut into two files, against its expec
 make check-separate  # the same programs built from one C file per module, and what a rebuild touches
 make check-std    # the standard library against independent models in Python (zlib, exhaustive 8-bit tables, ...)
 make fuzz         # damaged programs must be rejected cleanly, never crash the compiler
+make bench        # run time and build time against Rust, same algorithms, checks on in both (about 20 minutes; see bench/README.md)
 make -C examples/cortex-m test   # just the firmware (see examples/cortex-m/README.md)
 
 ./noge prog.nge                    # compile and run in one step (builds the compiler the first time)

@@ -1,0 +1,37 @@
+// 500 x 500 matrix product: 125 million multiply-adds with checked u64 arithmetic and bounds-checked indexing.
+fn main() -> i32 {
+    var a: [u32; 250000] = [0; 250000];
+    var b: [u32; 250000] = [0; 250000];
+    var c: [u64; 250000] = [0; 250000];
+    var x: u32 = 12345;
+    var i: usize = 0;
+    while i < 250000 {
+        x = wrapping_add(wrapping_mul(x, 1664525), 1013904223);
+        a[i] = (x >> 16) % 100;
+        x = wrapping_add(wrapping_mul(x, 1664525), 1013904223);
+        b[i] = (x >> 16) % 100;
+        i = i + 1;
+    }
+    i = 0;
+    while i < 500 {
+        var k: usize = 0;
+        while k < 500 {
+            let aik = a[i * 500 + k] as u64;
+            var j: usize = 0;
+            while j < 500 {
+                c[i * 500 + j] = c[i * 500 + j] + aik * (b[k * 500 + j] as u64);
+                j = j + 1;
+            }
+            k = k + 1;
+        }
+        i = i + 1;
+    }
+    var sum: u64 = 0;
+    i = 0;
+    while i < 250000 {
+        sum = sum + c[i] % 1000;
+        i = i + 1;
+    }
+    print((sum % 2000000011) as i32);
+    return 0;
+}
