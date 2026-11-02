@@ -5,15 +5,21 @@ static void usage(void) {
                     "  --no-builtins     do not use __builtin_*_overflow; emit portable C99 checks instead\n"
                     "  --freestanding    no C library: no print, no stdio; run-time checks call noge_trap_hook\n"
                     "  --ptr-bits=N      width of usize, isize and pointers on the target: 32 or 64 (the host's by default)\n"
-                    "  --target=cortex-m shorthand for --freestanding --ptr-bits=32\n");
+                    "  --target=cortex-m shorthand for --freestanding --ptr-bits=32\n"
+                    "  --std-dir=DIR     where the standard library (std/) is; also the NOGE_STD variable\n"
+                    "  --no-prelude      do not import std/prelude.nge (Option and Result) into every module\n");
 }
 
 int main(int argc, char **argv) {
     const char *in = NULL, *outpath = NULL;
     EmitOpts opts = {0};
+    const char *std_dir = getenv("NOGE_STD");
+    bool prelude = true;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) outpath = argv[++i];
         else if (strcmp(argv[i], "--no-builtins") == 0) opts.portable = true;
+        else if (strncmp(argv[i], "--std-dir=", 10) == 0) std_dir = argv[i] + 10;
+        else if (strcmp(argv[i], "--no-prelude") == 0) prelude = false;
         else if (strcmp(argv[i], "--freestanding") == 0) g_freestanding = true;
         else if (strncmp(argv[i], "--ptr-bits=", 11) == 0) {
             g_ptr_bits = atoi(argv[i] + 11);
@@ -38,9 +44,32 @@ int main(int argc, char **argv) {
         usage();
         return 2;
     }
+    if (!std_dir) { /* std/ next to the folder nogec is in: build/nogec, std/ */
+        const char *slash = strrchr(argv[0], '/');
+        if (slash) {
+            size_t n = (size_t)(slash - argv[0]) + 16;
+            char *guess = malloc(n + 16);
+            if (guess) {
+                snprintf(guess, n + 16, "%.*s/../std", (int)(slash - argv[0]), argv[0]);
+                char probe[4096];
+                snprintf(probe, sizeof probe, "%s/prelude.nge", guess);
+                FILE *f = fopen(probe, "rb");
+                if (f) {
+                    fclose(f);
+                    std_dir = guess;
+                }
+            }
+        }
+    }
+    g_std_dir = std_dir;
     g_file = in;
-    char *src = read_file(in);
-    Node *prog = parse_program(lex(src));
+    FILE *probe_in = fopen(in, "rb"); /* a missing program is not an error in the program */
+    if (!probe_in) {
+        fprintf(stderr, "noge: cannot open '%s'\n", in);
+        return 1;
+    }
+    fclose(probe_in);
+    Node *prog = load_program(in, prelude);
     prog = check_program(prog);
     flow_program(prog);
     IrFunc *ir = lower_program(prog);

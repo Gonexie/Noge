@@ -127,7 +127,9 @@ typedef enum {
     /* parts of a match */
     N_ARM, N_PAT,
     /* a generic parameter of a declaration: `T`, or `const N: usize` */
-    N_TPARAM
+    N_TPARAM,
+    /* import "file.nge" as name;  (removed again when the files are loaded) */
+    N_IMPORT
 } NodeKind;
 
 /* N_PAT: what a pattern is */
@@ -164,6 +166,9 @@ struct Node {
     int index;     /* VDECL: position of the variant in its enum */
     int flag;      /* VDECL / VARIANT / PAT: written with parentheses; MATCH: used as a statement */
     LocalInfo *linfo; /* FN: every local variable by id (parameters first) */
+    Str qual;         /* a name written module::name: the module part */
+    int mod;          /* a declaration: the module it is in (0 is the program's own file) */
+    int pub;          /* a declaration: marked pub, so other modules may use it */
     Node *gen;        /* FN / STRUCT / ENUM: its generic parameters (N_TPARAM); TYPE / CALL / VARIANT / LIT: the arguments written */
     struct Inst *inst; /* a generic declaration: its instances; an instance: the record of how it was made */
     uint64_t ival;
@@ -184,6 +189,26 @@ typedef struct Inst {
     const char *name; /* for messages: Pair<i32, bool> */
     struct Inst *next;
 } Inst;
+
+/* ---- modules: each file is one ---- */
+typedef struct Module Module;
+typedef struct Import {
+    Str alias;         /* import "f" as alias: its names are used as alias::name; empty: they are merged in */
+    Module *mod;
+    int line;
+    bool prelude;      /* the standard prelude, which any other source of a name beats */
+    struct Import *next;
+} Import;
+struct Module {
+    int id;
+    const char *path;
+    Import *imports;
+    Node *decls;
+};
+extern Module **g_modules;
+extern int g_nmodules;
+extern const char *g_std_dir; /* where std/ is, for import "std/..." and the prelude; NULL: not found */
+Node *load_program(const char *path, bool use_prelude); /* parse the file and everything it imports */
 
 Node *parse_program(Token *toks); /* list of N_FN / N_STRUCT */
 Node *check_program(Node *prog); /* returns the list without the generic declarations, plus every instance */

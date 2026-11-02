@@ -529,6 +529,7 @@ static void flow_fn(Node *fn) {
 void flow_program(Node *prog) {
     for (Node *d = prog; d; d = d->next)
         if (d->kind == N_FN && d->ext != EXT_EXTERN) {
+            g_file = g_modules[d->mod]->path;
             if (d->inst) note_push("in '%s', which was asked for on line %d", note_name(d->inst->name), d->inst->line);
             flow_fn(d);
             if (d->inst) note_pop();

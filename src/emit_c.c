@@ -87,6 +87,7 @@ static void put_addr(const IrPlace *p) {
 /* the C name of a function: f_name, x_name for one defined in C, or f<id>_name for an instance of a generic one */
 static void put_fn_ident(Node *fn) {
     if (fn->inst) fprintf(out, "f%d_%.*s", fn->inst->id, SF(fn->name));
+    else if (fn->mod != 0 && fn->ext != EXT_EXTERN) fprintf(out, "fm%d_%.*s", fn->mod, SF(fn->name)); /* another module */
     else fprintf(out, "%c_%.*s", fn->ext == EXT_EXTERN ? 'x' : 'f', SF(fn->name));
 }
 
@@ -712,14 +713,14 @@ static void emit_prelude(const char *file) {
           "#define NOGE_NORETURN\n"
           "#define NOGE_UNUSED\n"
           "#endif\n"
-          "static inline NOGE_NORETURN NOGE_UNUSED void noge_trap_default(int kind, int line) {\n"
+          "static inline NOGE_NORETURN NOGE_UNUSED void noge_trap_default(int kind, int line, const char *file) {\n"
           "    static const char *const what[] = {\"\", \"integer overflow\", \"division by zero\",\n"
           "                                       \"array index out of bounds\", \"shift amount out of range\"};\n"
           "    fflush(stdout);\n"
-          "    fprintf(stderr, \"%s:%d: runtime error: %s\\n\", NOGE_FILE, line, what[kind]);\n"
+          "    fprintf(stderr, \"%s:%d: runtime error: %s\\n\", file, line, what[kind]);\n"
           "    exit(101);\n"
           "}\n"
-          "#define NOGE_TRAP(kind, line) noge_trap_default((kind), (line))\n"
+          "#define NOGE_TRAP(kind, line) noge_trap_default((kind), (line), NOGE_FILE)\n"
           "#endif\n\n",
           out);
 }
@@ -727,7 +728,7 @@ static void emit_prelude(const char *file) {
 void emit_c(FILE *f, Node *prog, IrFunc *funcs, const EmitOpts *o) {
     out = f;
     opts = o;
-    emit_prelude(g_file);
+    emit_prelude(g_modules[0]->path);
 
     for (Node *d = prog; d; d = d->next)
         if (d->kind == N_STRUCT || d->kind == N_ENUM) fprintf(out, "typedef struct %s %s;\n", d->type->cname, d->type->cname);
@@ -750,7 +751,17 @@ void emit_c(FILE *f, Node *prog, IrFunc *funcs, const EmitOpts *o) {
     if (!opts->freestanding) fputs("\nvoid f_print(int32_t x) { printf(\"%d\\n\", (int)x); }\n", out);
     fputc('\n', out);
 
+    int file_mod = 0; /* the module NOGE_FILE names: a failed check says which file the line is in */
     for (IrFunc *fn = funcs; fn; fn = fn->next) {
+        if (!opts->freestanding && fn->decl->mod != file_mod) {
+            file_mod = fn->decl->mod;
+            fputs("#undef NOGE_FILE\n#define NOGE_FILE \"", out);
+            for (const char *p = g_modules[file_mod]->path; *p; p++) {
+                if (*p == '"' || *p == '\\') fputc('\\', out);
+                fputc(*p, out);
+            }
+            fputs("\"\n", out);
+        }
         emit_sig(fn);
         fputs(" {\n", out);
         for (int k = 0; k < fn->nparams; k++) {

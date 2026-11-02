@@ -37,7 +37,13 @@ static Node builtin_print, builtin_print_param;
 /* ---- name tables: structs, functions and constants are looked up by name all the time ---- */
 typedef struct { Str key; Node *val; } Slot;
 typedef struct { Slot *slots; size_t cap; } Map;
-static Map struct_map, fn_map, const_map;
+typedef struct { Map types, fns, consts; } ModScope; /* the names a module declares */
+static ModScope *scopes;
+static int cur_mod; /* the module whose names the code being checked sees */
+static void enter_module(int m) {
+    cur_mod = m;
+    g_file = g_modules[m]->path;
+}
 
 static uint32_t hash_str(Str s) { /* FNV-1a */
     uint32_t h = 2166136261u;
@@ -157,14 +163,51 @@ static int64_t const_int_value(Node *e) {
 }
 
 /* ---- types ---- */
-/* structs and enums share one namespace (the map is still called struct_map) */
-static Node *find_decl(Str name) { return map_get(&struct_map, name); }
-static Node *find_struct(Str name) {
-    Node *d = find_decl(name);
+/* ---- scopes: what a name means depends on the module it is written in ----
+ * A module sees its own declarations, then those of the modules it imports without a name (public ones only; the
+ * standard prelude last, so anything else beats it), and reaches the others as name::item. */
+enum { K_TYPE, K_FN, K_CONST };
+static Map *scope_map(Module *m, int kind) {
+    ModScope *s = &scopes[m->id];
+    return kind == K_TYPE ? &s->types : kind == K_FN ? &s->fns : &s->consts;
+}
+
+static Module *find_alias(Str alias) {
+    for (Import *i = g_modules[cur_mod]->imports; i; i = i->next)
+        if (i->alias.n && str_eq(i->alias, alias)) return i->mod;
+    return NULL;
+}
+
+static Node *scope_find(int kind, Str qual, Str name, int line) {
+    if (qual.n) {
+        Module *m = find_alias(qual);
+        if (!m) die(line, "unknown module '%.*s'", SF(qual));
+        Node *d = map_get(scope_map(m, kind), name);
+        if (d && !d->pub) die(line, "'%.*s' is private to module '%.*s': declare it 'pub' there", SF(name), SF(qual));
+        return d;
+    }
+    Node *own = map_get(scope_map(g_modules[cur_mod], kind), name);
+    if (own) return own;
+    Node *found = NULL, *from_prelude = NULL;
+    for (Import *i = g_modules[cur_mod]->imports; i; i = i->next) {
+        if (i->alias.n) continue;
+        Node *d = map_get(scope_map(i->mod, kind), name);
+        if (!d || !d->pub) continue;
+        if (i->prelude) from_prelude = d;
+        else if (found && found != d) die(line, "'%.*s' comes from two imported modules; write module::%.*s", SF(name), SF(name));
+        else found = d;
+    }
+    return found ? found : from_prelude;
+}
+
+/* structs and enums share one namespace */
+static Node *find_decl(Str qual, Str name, int line) { return scope_find(K_TYPE, qual, name, line); }
+static Node *find_struct(Str qual, Str name, int line) {
+    Node *d = find_decl(qual, name, line);
     return d && d->kind == N_STRUCT ? d : NULL;
 }
-static Node *find_enum(Str name) {
-    Node *d = find_decl(name);
+static Node *find_enum(Str qual, Str name, int line) {
+    Node *d = find_decl(qual, name, line);
     return d && d->kind == N_ENUM ? d : NULL;
 }
 static Node *find_variant(Node *en, Str name) {
@@ -433,7 +476,12 @@ static Inst *new_inst(Node *tpl, Type **types, uint64_t *vals, Type **ctypes, in
 static void finish_pending(void) {
     int n = npending;
     npending = 0;
-    for (int i = 0; i < n; i++) visit_decl(pending[i]);
+    int saved_mod = cur_mod;
+    for (int i = 0; i < n; i++) {
+        enter_module(pending[i]->mod);
+        visit_decl(pending[i]);
+    }
+    enter_module(saved_mod);
     for (int i = 0; i < n; i++)
         if (pending[i]->kind == N_STRUCT) layout_type(pending[i]->type);
 }
@@ -463,6 +511,8 @@ static Type *instantiate_type(Node *tpl, Type **types, uint64_t *vals, Type **ct
 
     note_push("in '%s', which was asked for on line %d", note_name(r->name), line);
     inst_depth++;
+    int saved_mod = cur_mod;
+    enter_module(tpl->mod);
     if (is_enum) {
         resolve_enum(d);
     } else {
@@ -481,6 +531,7 @@ static Type *instantiate_type(Node *tpl, Type **types, uint64_t *vals, Type **ct
         for (Node *f = d->a; f; f = f->next) all_copy = all_copy && f->type->is_copy;
     }
     t->is_copy = d->op != 0 && all_copy;
+    enter_module(saved_mod);
     pending[npending++] = d;
     inst_depth--;
     note_pop();
@@ -499,12 +550,15 @@ static Node *instantiate_fn(Node *tpl, Type **types, uint64_t *vals, Type **ctyp
     r->decl = d;
     note_push("in '%s', which was asked for on line %d", note_name(r->name), line);
     inst_depth++;
+    int saved_mod = cur_mod;
+    enter_module(tpl->mod);
     for (Node *p = d->a; p; p = p->next) {
         for (Node *q = d->a; q != p; q = q->next)
             if (str_eq(q->name, p->name)) die(p->line, "parameter '%.*s' declared twice", SF(p->name));
         p->type = resolve_type(p->ty);
     }
     d->type = d->ty ? resolve_type(d->ty) : ty_unit;
+    enter_module(saved_mod);
     inst_depth--;
     note_pop();
     prog_tail->next = d;
@@ -530,7 +584,8 @@ static void bind_init(Bind *b, Node *tpl) {
     b->vals = gzalloc(sizeof(uint64_t) * (size_t)b->n);
     b->ctypes = gzalloc(sizeof(Type *) * (size_t)b->n);
     b->bound = gzalloc((size_t)b->n);
-    int i = 0;
+    int i = 0, saved_mod = cur_mod;
+    enter_module(tpl->mod);
     for (Node *p = tpl->gen; p; p = p->next, i++) {
         if (p->op != 1) continue;
         Type *t = resolve_type(p->ty);
@@ -538,6 +593,7 @@ static void bind_init(Bind *b, Node *tpl) {
             die(p->line, "const parameter '%.*s' must have an integer type, not '%s'", SF(p->name), t->name);
         b->ctypes[i] = t;
     }
+    enter_module(saved_mod);
 }
 
 static Str param_name(Bind *b, int k) {
@@ -580,17 +636,17 @@ static void bind_val(Bind *b, int k, uint64_t v, int line, bool soft) {
 
 /* Match the written type `pat` (in the template, with its parameters in it) against a real type, and bind the
  * parameters it names. `soft`: only fill parameters that are still open. */
-static void unify(Bind *b, Node *pat, Type *actual, bool soft) {
+static void unify_r(Bind *b, Node *pat, Type *actual, bool soft) {
     if (pat->kind != N_TYPE || pat->type) return;
     if (pat->op == 1) { /* [X; N] */
         if (actual->kind != TY_ARRAY) return;
-        unify(b, pat->a, actual->elem, soft);
+        unify_r(b, pat->a, actual->elem, soft);
         int k = param_of(b, pat->b);
         if (k >= 0 && b->ctypes[k]) bind_val(b, k, actual->len, pat->line, soft);
         return;
     }
     if (pat->op == 2) { /* *mut X */
-        if (actual->kind == TY_PTR) unify(b, pat->a, actual->elem, soft);
+        if (actual->kind == TY_PTR) unify_r(b, pat->a, actual->elem, soft);
         return;
     }
     int k = pat->gen ? -1 : gen_index(b->tpl->gen, pat->name);
@@ -599,19 +655,26 @@ static void unify(Bind *b, Node *pat, Type *actual, bool soft) {
         return;
     }
     if (pat->gen) { /* Name<args>: an instance of that generic type */
-        Node *g = find_decl(pat->name);
+        Node *g = find_decl(pat->tyname, pat->name, pat->line);
         Inst *r = actual->decl ? actual->decl->inst : NULL;
         if (!g || !g->gen || !r || r->origin != g) return;
         int i = 0;
         for (Node *a = pat->gen; a && i < r->n; a = a->next, i++) {
             if (r->types[i]) {
-                unify(b, a, r->types[i], soft);
+                unify_r(b, a, r->types[i], soft);
             } else {
                 int k2 = param_of(b, a);
                 if (k2 >= 0 && b->ctypes[k2]) bind_val(b, k2, r->vals[i], a->line, soft);
             }
         }
     }
+}
+
+static void unify(Bind *b, Node *pat, Type *actual, bool soft) {
+    int saved_mod = cur_mod;
+    enter_module(b->tpl->mod); /* the names in the template's types are the template's module's */
+    unify_r(b, pat, actual, soft);
+    enter_module(saved_mod);
 }
 
 static Type *type_arg(Node *a) {
@@ -626,7 +689,7 @@ static uint64_t const_arg_value(Node *arg, Type *pt) {
     e->next = NULL;
     if (arg->kind == N_TYPE) {
         if (arg->op != 0 || arg->gen || arg->type) die(arg->line, "expected a constant number here, found a type");
-        if (!map_get(&const_map, arg->name))
+        if (!scope_find(K_CONST, (Str){0}, arg->name, arg->line))
             die(arg->line, "expected a constant number here, but '%.*s' is not a constant", SF(arg->name));
         e->kind = N_NAME;
     }
@@ -665,7 +728,11 @@ static Type *subst_type(Bind *b, Node *pat) {
     for (Node *p = b->tpl->gen; p; p = p->next, k++)
         if (!b->bound[k] && mentions(pat, p->name)) return NULL;
     Subst s = {b->tpl->gen, b->types, b->vals, b->ctypes};
-    return resolve_type(clone_node(pat, &s));
+    int saved_mod = cur_mod;
+    enter_module(b->tpl->mod); /* the names in the template's types are the template's module's */
+    Type *t = resolve_type(clone_node(pat, &s));
+    enter_module(saved_mod);
+    return t;
 }
 
 /* Check the values of a call, struct literal or variant while working out the parameters from their types.
@@ -727,7 +794,7 @@ static Type *resolve_type(Node *ty) {
     }
     for (int i = 1; i < NPRIMS; i++)
         if (str_is(ty->name, prims[i].name)) return &prims[i];
-    Node *s = find_decl(ty->name);
+    Node *s = find_decl(ty->tyname, ty->name, ty->line);
     if (s) {
         if (s->gen) {
             if (!ty->gen) die(ty->line, "'%.*s' is generic: write its arguments, as in %.*s<...>", SF(s->name), SF(s->name));
@@ -756,10 +823,10 @@ static bool is_intrinsic(Str name) {
            str_is(name, "ptr_offset") || str_is(name, "volatile_read") || str_is(name, "volatile_write");
 }
 
-static Node *lookup_fn(Str name) {
-    Node *f = map_get(&fn_map, name);
+static Node *lookup_fn(Str qual, Str name, int line) {
+    Node *f = scope_find(K_FN, qual, name, line);
     if (f) return f;
-    if (!g_freestanding && str_eq(name, builtin_print.name)) return &builtin_print;
+    if (!qual.n && !g_freestanding && str_eq(name, builtin_print.name)) return &builtin_print;
     return NULL;
 }
 
@@ -1028,7 +1095,7 @@ static Node *infer_call(Node *tpl, Node *n, Type *expect, Type ***pre_out) {
 }
 
 static Type *check_call(Node *n, Type *expect) {
-    Node *fn = lookup_fn(n->name);
+    Node *fn = lookup_fn(n->qual, n->name, n->line);
     if (!fn && g_freestanding && str_is(n->name, "print"))
         die(n->line, "'print' needs a hosted C library (it uses stdio), but this is a freestanding build");
     if (!fn) die(n->line, "unknown function '%.*s'", SF(n->name));
@@ -1179,6 +1246,7 @@ static void check_pattern(Node *p, Type *t, bool in_alternative) {
         if (t->kind != TY_ENUM)
             die(p->line, "'%.*s::%.*s' is a variant of an enum, but the value being matched has type '%s'", SF(p->tyname),
                 SF(p->name), t->name);
+        if (p->qual.n && !find_alias(p->qual)) die(p->line, "unknown module '%.*s'", SF(p->qual));
         if (!str_eq(t->decl->name, p->tyname))
             die(p->line, "the pattern '%.*s::%.*s' does not match the type '%s'", SF(p->tyname), SF(p->name), t->name);
         Node *v = find_variant(t->decl, p->name);
@@ -1438,7 +1506,13 @@ static Type *check_expr_inner(Node *n, Type *expect) {
     case N_CSTR:
         return ptr_type(ty_u8, false);
     case N_VARIANT: {
-        Node *ed = find_enum(n->tyname);
+        if (!n->qual.n && find_alias(n->tyname) && !find_decl((Str){0}, n->tyname, n->line)) { /* module::name */
+            n->qual = n->tyname;
+            n->tyname = (Str){0};
+            n->kind = n->flag ? N_CALL : N_NAME;
+            return check_expr_inner(n, expect);
+        }
+        Node *ed = find_enum(n->qual, n->tyname, n->line);
         if (!ed) die(n->line, "unknown enum '%.*s'", SF(n->tyname));
         Node *v = find_variant(ed, n->name);
         if (!v) die(n->line, "enum '%.*s' has no variant '%.*s'", SF(ed->name), SF(n->name));
@@ -1472,14 +1546,14 @@ static Type *check_expr_inner(Node *n, Type *expect) {
     case N_MATCH:
         return check_match(n, expect);
     case N_NAME: {
-        Local *l = const_ctx ? NULL : find_local(n->name);
+        Local *l = (const_ctx || n->qual.n) ? NULL : find_local(n->name);
         if (l) {
             n->local = l->id;
             n->by_ptr = l->by_ptr;
             n->mut = l->is_mut;
             return l->type;
         }
-        Node *c = map_get(&const_map, n->name);
+        Node *c = scope_find(K_CONST, n->qual, n->name, n->line);
         if (!c && const_ctx && find_local(n->name))
             die(n->line, "'%.*s' is a variable, but a compile-time constant is needed here", SF(n->name));
         if (!c) die(n->line, "unknown name '%.*s'", SF(n->name));
@@ -1498,7 +1572,7 @@ static Type *check_expr_inner(Node *n, Type *expect) {
         return f->type;
     }
     case N_CALL:
-        return is_intrinsic(n->name) ? check_intrinsic(n, expect) : check_call(n, expect);
+        return !n->qual.n && is_intrinsic(n->name) ? check_intrinsic(n, expect) : check_call(n, expect);
     case N_INDEX: {
         if (!is_place(n->a)) die(n->line, "only an array variable, field or element can be indexed");
         Type *at = check_expr(n->a, NULL);
@@ -1536,7 +1610,7 @@ static Type *check_expr_inner(Node *n, Type *expect) {
         return array_type(t, len);
     }
     case N_LIT: {
-        Node *s = find_struct(n->name);
+        Node *s = find_struct(n->qual, n->name, n->line);
         if (!s) die(n->line, "unknown struct '%.*s'", SF(n->name));
         Type **pre = NULL;
         if (s->gen) { /* a generic struct: the values (or the expected type) decide which instance */
@@ -1655,6 +1729,8 @@ static void const_resolve(Node *c) {
     if (c->mut == 2) return;
     if (c->mut == 1) die(c->line, "constant '%.*s' is defined in terms of itself", SF(c->name));
     c->mut = 1;
+    int saved_mod = cur_mod;
+    enter_module(c->mod);
     int saved_unsafe = unsafe_depth;
     unsafe_depth = 0;
     const_ctx++;
@@ -1669,6 +1745,7 @@ static void const_resolve(Node *c) {
     c->op = c->a->kind == N_INT ? c->a->op : 0;
     const_ctx--;
     unsafe_depth = saved_unsafe;
+    enter_module(saved_mod);
     c->mut = 2;
 }
 
@@ -1703,7 +1780,7 @@ static void check_stmt(Node *s) {
         break;
     }
     case N_ASSIGN: {
-        if (s->a->kind == N_NAME && !find_local(s->a->name) && map_get(&const_map, s->a->name))
+        if (s->a->kind == N_NAME && !find_local(s->a->name) && scope_find(K_CONST, s->a->qual, s->a->name, s->a->line))
             die(s->a->line, "'%.*s' is a constant and cannot be assigned to", SF(s->a->name));
         Type *lt = check_expr(s->a, NULL);
         require_mutable_place(s->a, "assigned to");
@@ -1835,6 +1912,7 @@ static int layout_type(Type *t) {
 }
 
 static void check_fn(Node *fn) {
+    enter_module(fn->mod);
     cur_fn = fn;
     nlocals = 0;
     depth = 1;
@@ -1869,18 +1947,19 @@ Node *check_program(Node *program) {
     builtin_print.a = &builtin_print_param;
 
     /* 1. declare struct, function and constant names */
-    size_t nstructs = 0, nfns = 0, nconsts = 0;
-    for (Node *d = prog; d; d = d->next) {
-        if (d->kind == N_STRUCT || d->kind == N_ENUM) nstructs++;
-        else if (d->kind == N_CONST) nconsts++;
-        else nfns++;
+    size_t *cnt = arena_alloc(&g_arena, sizeof(size_t) * 3 * (size_t)g_nmodules);
+    for (Node *d = prog; d; d = d->next)
+        cnt[3 * d->mod + (d->kind == N_STRUCT || d->kind == N_ENUM ? 0 : d->kind == N_CONST ? 2 : 1)]++;
+    scopes = arena_alloc(&g_arena, sizeof(ModScope) * (size_t)g_nmodules);
+    for (int i = 0; i < g_nmodules; i++) {
+        map_init(&scopes[i].types, cnt[3 * i]);
+        map_init(&scopes[i].fns, cnt[3 * i + 1]);
+        map_init(&scopes[i].consts, cnt[3 * i + 2]);
     }
-    map_init(&struct_map, nstructs);
-    map_init(&fn_map, nfns);
-    map_init(&const_map, nconsts);
     for (Node *d = prog; d; d = d->next) {
+        enter_module(d->mod);
         bool is_type = d->kind == N_STRUCT || d->kind == N_ENUM;
-        Map *m = is_type ? &struct_map : d->kind == N_CONST ? &const_map : &fn_map;
+        Map *m = is_type ? &scopes[d->mod].types : d->kind == N_CONST ? &scopes[d->mod].consts : &scopes[d->mod].fns;
         if (!map_put(m, d->name, d)) die(d->line, "'%.*s' is defined twice", SF(d->name));
         if (d->gen) {
             for (Node *p = d->gen; p; p = p->next)
@@ -1902,9 +1981,9 @@ Node *check_program(Node *program) {
             t->kind = d->kind == N_ENUM ? TY_ENUM : TY_STRUCT;
             t->nleaves = d->kind == N_ENUM ? 1 : 0; /* flow treats an enum as one unit, like an array */
             t->name = arena_strn(&g_arena, d->name.p, d->name.n);
-            char *cn = arena_alloc(&g_arena, (size_t)d->name.n + 3);
-            memcpy(cn, d->kind == N_ENUM ? "e_" : "s_", 2);
-            memcpy(cn + 2, d->name.p, (size_t)d->name.n);
+            char *cn = arena_alloc(&g_arena, (size_t)d->name.n + 24);
+            if (d->mod == 0) snprintf(cn, (size_t)d->name.n + 24, "%c_%.*s", d->kind == N_ENUM ? 'e' : 's', SF(d->name));
+            else snprintf(cn, (size_t)d->name.n + 24, "%cm%d_%.*s", d->kind == N_ENUM ? 'e' : 's', d->mod, SF(d->name));
             t->cname = cn;
             t->decl = d;
             t->is_copy = d->op != 0;
@@ -1913,11 +1992,19 @@ Node *check_program(Node *program) {
             die(d->line, "'%.*s' is a builtin function", SF(d->name));
         }
     }
+    for (int i = 0; i < g_nmodules; i++) { /* a module name cannot also be the name of one of the module's own things */
+        enter_module(i);
+        for (Import *im = g_modules[i]->imports; im; im = im->next)
+            if (im->alias.n && (map_get(&scopes[i].types, im->alias) || map_get(&scopes[i].fns, im->alias) ||
+                                map_get(&scopes[i].consts, im->alias)))
+                die(im->line, "'%.*s' is both the name of an import and of a declaration in this module", SF(im->alias));
+    }
 
     /* 2. struct fields. Generic instances made on the way wait (inst_depth) until every plain type is resolved. */
     inst_depth = 1;
     for (Node *d = prog; d; d = d->next) {
         if (d->kind != N_STRUCT || d->gen || d->inst) continue;
+        enter_module(d->mod);
         for (Node *f = d->a; f; f = f->next) {
             for (Node *g = d->a; g != f; g = g->next)
                 if (str_eq(g->name, f->name)) die(f->line, "field '%.*s' declared twice", SF(f->name));
@@ -1925,13 +2012,20 @@ Node *check_program(Node *program) {
         }
     }
     for (Node *d = prog; d; d = d->next)
-        if (d->kind == N_ENUM && !d->gen && !d->inst) resolve_enum(d);
+        if (d->kind == N_ENUM && !d->gen && !d->inst) {
+            enter_module(d->mod);
+            resolve_enum(d);
+        }
     inst_depth = 0;
     finish_pending();
     for (Node *d = prog; d; d = d->next)
-        if ((d->kind == N_STRUCT || d->kind == N_ENUM) && !d->gen && !d->inst) visit_decl(d);
+        if ((d->kind == N_STRUCT || d->kind == N_ENUM) && !d->gen && !d->inst) {
+            enter_module(d->mod);
+            visit_decl(d);
+        }
     for (Node *d = prog; d; d = d->next) {
         if (d->kind != N_STRUCT || d->gen || d->inst) continue;
+        enter_module(d->mod);
         layout_type(d->type);
         if (!d->type->is_copy) continue;
         for (Node *f = d->a; f; f = f->next)
@@ -1942,10 +2036,14 @@ Node *check_program(Node *program) {
 
     /* 3. constants, then function signatures */
     for (Node *d = prog; d; d = d->next)
-        if (d->kind == N_CONST) const_resolve(d);
+        if (d->kind == N_CONST) {
+            enter_module(d->mod);
+            const_resolve(d);
+        }
     Node *main_fn = NULL;
     for (Node *d = prog; d; d = d->next) {
         if (d->kind != N_FN || d->gen || d->inst) continue;
+        enter_module(d->mod);
         for (Node *p = d->a; p; p = p->next) {
             for (Node *q = d->a; q != p; q = q->next)
                 if (str_eq(q->name, p->name)) die(p->line, "parameter '%.*s' declared twice", SF(p->name));
@@ -1953,8 +2051,9 @@ Node *check_program(Node *program) {
         }
         d->type = d->ty ? resolve_type(d->ty) : ty_unit;
         if (d->ext != EXT_NONE) check_c_signature(d);
-        if (str_is(d->name, "main")) main_fn = d;
+        if (str_is(d->name, "main") && d->mod == 0) main_fn = d;
     }
+    enter_module(0);
     if (!main_fn) die(1, "no 'main' function");
     if (main_fn->a || main_fn->type != ty_i32 || main_fn->ext != EXT_NONE)
         die(main_fn->line, "'main' must be declared as 'fn main() -> i32'");
@@ -1963,6 +2062,7 @@ Node *check_program(Node *program) {
     for (Node *d = prog; d; d = d->next) /* instances made by calls are appended, and checked in their turn */
         if (d->kind == N_FN && d->ext != EXT_EXTERN && !d->gen) check_fn(d);
 
+    enter_module(0);
     /* the later passes see instances only, not the generic templates */
     Node *head = NULL, **tail = &head;
     for (Node *d = prog; d;) {

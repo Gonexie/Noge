@@ -1,6 +1,6 @@
 CC      ?= cc
 CFLAGS  ?= -std=c99 -Wall -Wextra -Wpedantic -O2 -g
-SRC      = src/util.c src/lexer.c src/parser.c src/check.c src/flow.c src/lower.c src/emit_c.c src/main.c
+SRC      = src/util.c src/lexer.c src/parser.c src/check.c src/flow.c src/lower.c src/emit_c.c src/modules.c src/main.c
 
 build/nogec: $(SRC) src/noge.h src/ir.h
 	@mkdir -p build

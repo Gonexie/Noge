@@ -133,6 +133,11 @@ static Node *parse_type(void) {
         return n;
     }
     n->name = expect(T_IDENT)->text;
+    if (cur()->kind == T_COLONCOLON && peek(1)->kind == T_IDENT) { /* module::Name */
+        advance();
+        n->tyname = n->name;
+        n->name = advance()->text;
+    }
     /* a primitive never has arguments, so `x as i32 < y` stays a comparison */
     if (cur()->kind == T_LT && !is_prim_name(n->name)) {
         advance();
@@ -143,6 +148,31 @@ static Node *parse_type(void) {
 
 static Node *parse_block(void);
 static Node *parse_match(void);
+
+/* `{ f: e, g: e }` after the name of a struct: the fields go in n->a */
+static void parse_lit_fields(Node *n) {
+    expect(T_LBRACE);
+    int save = nolit;
+    nolit = 0;
+    Node **tail = &n->a;
+    while (cur()->kind != T_RBRACE) {
+        Token *f = expect(T_IDENT);
+        expect(T_COLON);
+        Node *i = mk(N_INITF, f->line);
+        i->name = f->text;
+        i->a = parse_expr();
+        *tail = i;
+        tail = &i->next;
+        if (!accept(T_COMMA)) break;
+    }
+    nolit = save;
+    expect(T_RBRACE);
+}
+
+static bool looks_like_struct_literal(void) {
+    return !nolit && cur()->kind == T_LBRACE &&
+           (peek(1)->kind == T_RBRACE || (peek(1)->kind == T_IDENT && peek(2)->kind == T_COLON));
+}
 
 static Node *parse_primary(void) {
     Token *t = cur();
@@ -214,10 +244,30 @@ static Node *parse_primary(void) {
         if (cur()->kind == T_COLONCOLON) { /* Enum::Variant or Enum::Variant(values) */
             advance();
             Token *v = expect(T_IDENT);
+            if (looks_like_struct_literal()) { /* module::Name { .. } */
+                Node *n = mk(N_LIT, t->line);
+                n->qual = t->text;
+                n->name = v->text;
+                n->gen = targs;
+                parse_lit_fields(n);
+                return n;
+            }
             Node *n = mk(N_VARIANT, t->line);
-            n->tyname = t->text;
+            n->tyname = t->text; /* Enum::Variant, or module::name: the checker tells which */
             n->name = v->text;
             n->gen = targs;
+            if (cur()->kind == T_COLONCOLON && peek(1)->kind == T_LT) { /* module::name::<args> */
+                if (targs) die(cur()->line, "generic arguments written twice");
+                advance();
+                advance();
+                n->gen = parse_targs();
+            }
+            if (cur()->kind == T_COLONCOLON && peek(1)->kind == T_IDENT) { /* module::Enum::Variant */
+                advance();
+                n->qual = t->text;
+                n->tyname = v->text;
+                n->name = advance()->text;
+            }
             if (cur()->kind == T_LPAREN) {
                 advance();
                 n->flag = 1;
@@ -251,28 +301,11 @@ static Node *parse_primary(void) {
             expect(T_RPAREN);
             return n;
         }
-        if (!nolit && cur()->kind == T_LBRACE &&
-            (peek(1)->kind == T_RBRACE ||
-             (peek(1)->kind == T_IDENT && peek(2)->kind == T_COLON))) { /* struct literal */
-            advance();
+        if (looks_like_struct_literal()) {
             Node *n = mk(N_LIT, t->line);
             n->name = t->text;
             n->gen = targs;
-            int save = nolit;
-            nolit = 0;
-            Node **tail = &n->a;
-            while (cur()->kind != T_RBRACE) {
-                Token *f = expect(T_IDENT);
-                expect(T_COLON);
-                Node *i = mk(N_INITF, f->line);
-                i->name = f->text;
-                i->a = parse_expr();
-                *tail = i;
-                tail = &i->next;
-                if (!accept(T_COMMA)) break;
-            }
-            nolit = save;
-            expect(T_RBRACE);
+            parse_lit_fields(n);
             return n;
         }
         if (targs) die(t->line, "generic arguments must be followed by '::Variant', a call '(...)' or a struct literal '{ ... }'");
@@ -516,6 +549,12 @@ static Node *parse_pattern_atom(void) {
             Node *p = mk_pat(PAT_VARIANT, t->line);
             p->tyname = t->text;
             p->name = v->text;
+            if (cur()->kind == T_COLONCOLON && peek(1)->kind == T_IDENT) { /* module::Enum::Variant */
+                advance();
+                p->qual = t->text;
+                p->tyname = v->text;
+                p->name = advance()->text;
+            }
             if (accept(T_LPAREN)) {
                 p->flag = 1;
                 Node **tail = &p->a;
@@ -698,6 +737,23 @@ Node *parse_program(Token *tokens) {
     Node *head = NULL, **tail = &head;
     while (cur()->kind != T_EOF) {
         Node *d;
+        bool is_pub = false; /* `pub` and `import` are words only where an item can start */
+        if (cur()->kind == T_IDENT && str_is(cur()->text, "pub") &&
+            (peek(1)->kind == T_FN || peek(1)->kind == T_STRUCT || peek(1)->kind == T_ENUM || peek(1)->kind == T_CONST ||
+             peek(1)->kind == T_EXTERN || peek(1)->kind == T_EXPORT ||
+             (peek(1)->kind == T_IDENT && str_is(peek(1)->text, "copy")))) {
+            advance();
+            is_pub = true;
+        }
+        if (cur()->kind == T_IDENT && str_is(cur()->text, "import") && peek(1)->kind == T_STR) {
+            d = mk(N_IMPORT, advance()->line);
+            d->tyname = advance()->str; /* the path */
+            if (accept(T_AS)) d->name = expect(T_IDENT)->text;
+            expect(T_SEMI);
+            *tail = d;
+            tail = &d->next;
+            continue;
+        }
         if (cur()->kind == T_FN) d = parse_fn(EXT_NONE);
         else if (cur()->kind == T_EXTERN || cur()->kind == T_EXPORT) { /* extern "C" fn f(..); / export "C" fn f(..) {..} */
             int ext = cur()->kind == T_EXTERN ? EXT_EXTERN : EXT_EXPORT;
@@ -717,6 +773,7 @@ Node *parse_program(Token *tokens) {
             else if (cur()->kind == T_STRUCT) d = parse_struct(true);
             else die(cur()->line, "expected 'struct' or 'enum' after 'copy', found %s", describe(cur()));
         } else die(cur()->line, "expected 'fn', 'struct', 'enum', 'copy struct', 'const', 'extern' or 'export', found %s", describe(cur()));
+        d->pub = is_pub;
         *tail = d;
         tail = &d->next;
     }
